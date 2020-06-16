@@ -1,32 +1,40 @@
 #include <stdio.h>
+#include <stdlib.h>
 #include <gmp.h>
 #include <mpfr.h>
+#include <string.h>
+
+#define MAX_LENGTH 2048
 
 int main(void)
 {
-  // This mode specifies round-to-nearest
-  mpfr_rnd_t rnd = MPFR_RNDN;
+    // This mode specifies round-to-nearest
+    mpfr_rnd_t rnd = MPFR_RNDN;
 
-  mpfr_t p, t;
+    int count_table[256] = {0};
+    mpfr_t low_table[256];
+    mpfr_t high_table[256];
 
-  // allocate unitialized memory for p as 256-bit numbers
-  mpfr_init2(p, 256);
-  mpfr_init2(t, 256);
+    for (int i = 0; i < 256; ++i) {
+        mpfr_init2(low_table[i], 256);
+        mpfr_init2(high_table[i], 256);
+    }
 
-  mpfr_set_d(p, 355, rnd);
-  mpfr_set_d(t, 113, rnd);
+    char buffer[MAX_LENGTH];
+    char *buffer_end;
+    // count each char in input
+    while (fgets(buffer, MAX_LENGTH, stdin) != NULL)
+    {
+        // puts(buffer);
+        count_table[(size_t)buffer[0]] = strtol(buffer + 2, &buffer_end, 10);
+        mpfr_inp_str(low_table[(size_t)buffer[0]], buffer_end, 10, rnd);
+    }
 
-  // a good approx of PI = 355/113
-  mpfr_div(p, p, t, rnd);
+    for (int i = 0; i < 256; ++i) {
+        if (count_table[i] > 0) {
+            mpfr_printf("%c %d %.6Rf\n", i, count_table[i], low_table[i]);
+        }
+    }
 
-  // Print Pi to standard out in base 10
-  printf("pi = ");
-  mpfr_out_str(stdout, 10, 0, p, rnd);
-  putchar('\n');
-
-  // Release memory
-  mpfr_clear(p);
-  mpfr_clear(t);
-
-  return 0;
+    return 0;
 }

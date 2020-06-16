@@ -2,41 +2,25 @@
 #include <gmp.h>
 #include <mpfr.h>
 #include <string.h>
-#include <string>
+
+#define MAX_LENGTH 1024
 
 int main(void)
 {
     // This mode specifies round-to-nearest
     mpfr_rnd_t rnd = MPFR_RNDN;
 
-    mpfr_t p, t;
-
-    // allocate unitialized memory for p as 256-bit numbers
-    mpfr_init2(p, 256);
-    mpfr_init2(t, 256);
-
-    mpfr_set_d(p, 355, rnd);
-    mpfr_set_d(t, 113, rnd);
-
-    // a good approx of PI = 355/113
-    mpfr_div(p, p, t, rnd);
-
-    // Print Pi to standard out in base 10
-    // printf("pi = ");
-    // mpfr_out_str(stdout, 10, 0, p, rnd);
-    // putchar('\n');
-
-    size_t BUFFER_SIZE = 1024;
-    char input[2015] = {0};
-
-    fgets(input, BUFFER_SIZE, stdin);
+    // read input
+    char input[MAX_LENGTH + 1] = {0};
+    fgets(input, MAX_LENGTH, stdin);
 
     int count_table[256] = {0};
     mpfr_t low_table[256];
     mpfr_t high_table[256];
 
+    // count each char in input
     const size_t char_count = strlen(input);
-    for (int i = 0; i < char_count; ++i)
+    for (size_t i = 0; i < char_count; ++i)
     {
         count_table[(int)input[i]] += 1;
     }
@@ -51,18 +35,23 @@ int main(void)
     {
         mpfr_init2(low_table[i], 256);
         mpfr_init2(high_table[i], 256);
-        if (count_table[i] > 0) {
-            // printf("%c %d\n", i, count_table[i]);
+        if (count_table[i] > 0)
+        {
             mpfr_set(low_table[i], range_counter, rnd);
-            // mpfr_div(temp, )
-            mpfr_add_d(range_counter, range_counter, (double)count_table[i]/char_count, rnd);
+            mpfr_add_d(range_counter, range_counter, (double)count_table[i] / char_count, rnd);
             mpfr_set(high_table[i], range_counter, rnd);
         }
     }
 
-    for (int i = 0; i < 256; ++i) {
-        if (count_table[i] > 0) {
-            mpfr_printf("%c %d %.6Rf %.6Rf\n", i, count_table[i], low_table[i], high_table[i]);
+    for (int i = 0; i < 256; ++i)
+    {
+        if (count_table[i] > 0)
+        {
+#ifdef DEBUG
+            mpfr_printf("%c %d %.9Rf %.9Rf\n", i, count_table[i], low_table[i], high_table[i]);
+#else
+            printf("%c %d\n", i, count_table[i]);
+#endif
         }
     }
 
@@ -73,17 +62,29 @@ int main(void)
     mpfr_init2(code_range, 256);
     mpfr_set_d(low, 0, rnd);
     mpfr_set_d(high, 1.0, rnd);
-    mpfr_set_d(code_range, 0, rnd);
 
-    for (int i = 0; i < char_count; ++i)
+    for (size_t i = 0; i < char_count; ++i)
     {
-        char c = input[i];
-        // mpfr_sub(code_range, )
+        size_t c = (size_t)input[i];
+        mpfr_sub(code_range, high, low, rnd);
+
+        // high = low + range*high_range(symbol)
+        mpfr_mul(temp, code_range, high_table[c], rnd);
+        mpfr_add(high, low, temp, rnd);
+
+        // low = low + range*low_range(symbol)
+        mpfr_mul(temp, code_range, low_table[c], rnd);
+        mpfr_add(low, low, temp, rnd);
     }
 
+    char output_buffer[1024] = {0};
+    mpfr_exp_t expptr;
+    mpfr_get_str(output_buffer, &expptr, 10, 0, low, rnd);
+    mpfr_printf("0.%s\n", output_buffer, expptr, low, high);
+
     // Release memory
-    mpfr_clear(p);
-    mpfr_clear(t);
+    mpfr_clear(low);
+    mpfr_clear(high);
 
     return 0;
 }

@@ -1,11 +1,20 @@
-default: aencode adecode
+CC=g++
+CFLAGS=-Wextra -Wall -Werror
 
+default: executables
+
+debug: CFLAGS += -DDEBUG -g
+debug: executables 
+
+executables: aencode adecode
 
 aencode: aencode.c
-	g++ -g -gdwarf-2 -o aencode aencode.c -lmpfr -lgmp
+	$(CC) $(CFLAGS) -o $@ $^ -lmpfr -lgmp
 
 adecode: adecode.c
-	g++ -g -gdwarf-2 -o adecode adecode.c -lmpfr -lgmp
+	$(CC) $(CFLAGS) -o $@ $^ -lmpfr -lgmp
+
+remake: clean all
 
 clean:
 	rm -f aencode adecode
