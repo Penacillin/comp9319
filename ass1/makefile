@@ -1,5 +1,5 @@
 CC=g++
-CFLAGS=-Wextra -Wall -Werror
+CFLAGS=-Wextra -Wall -Werror --std=c++11
 
 default: executables
 
@@ -8,13 +8,13 @@ debug: executables
 
 executables: aencode adecode
 
-aencode: aencode.c
-	$(CC) $(CFLAGS) -o $@ $^ -lmpfr -lgmp
+aencode: aencode.cpp utilities.hpp
+	$(CC) $(CFLAGS) -o $@ $< -lmpfr -lgmp
 
-adecode: adecode.c
-	$(CC) $(CFLAGS) -o $@ $^ -lmpfr -lgmp
+adecode: adecode.cpp utilities.hpp
+	$(CC) $(CFLAGS) -o $@ $< -lmpfr -lgmp
 
-remake: clean all
+remake: clean default
 
 clean:
 	rm -f aencode adecode

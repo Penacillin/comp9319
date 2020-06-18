@@ -3,13 +3,13 @@
 #include <mpfr.h>
 #include <string.h>
 
+#include "utilities.hpp"
+
 #define MAX_LENGTH 1024
+
 
 int main(void)
 {
-    // This mode specifies round-to-nearest
-    mpfr_rnd_t rnd = MPFR_RNDN;
-
     // read input
     char input[MAX_LENGTH + 1] = {0};
     fgets(input, MAX_LENGTH, stdin);
@@ -26,40 +26,26 @@ int main(void)
     }
 
     // Initialize count/range table
-    mpfr_t range_counter, temp;
-    mpfr_init2(range_counter, 256);
-    mpfr_init2(temp, 256);
-    mpfr_set_d(range_counter, 0.0, rnd);
-    mpfr_set_d(temp, 0.0, rnd);
-    for (int i = 0; i < 256; ++i)
-    {
-        mpfr_init2(low_table[i], 256);
-        mpfr_init2(high_table[i], 256);
-        if (count_table[i] > 0)
-        {
-            mpfr_set(low_table[i], range_counter, rnd);
-            mpfr_add_d(range_counter, range_counter, (double)count_table[i] / char_count, rnd);
-            mpfr_set(high_table[i], range_counter, rnd);
-        }
-    }
+    initialize_low_high_table(count_table, char_count, low_table, high_table);
 
     for (int i = 0; i < 256; ++i)
     {
         if (count_table[i] > 0)
         {
 #ifdef DEBUG
-            mpfr_printf("%c %d %.9Rf %.9Rf\n", i, count_table[i], low_table[i], high_table[i]);
-#else
-            printf("%c %d\n", i, count_table[i]);
+            mpfr_fprintf(stderr, "aencode: %c %d %.9Rf %.9Rf\n", i, count_table[i],
+                low_table[i], high_table[i]);
 #endif
+            printf("%c %d\n", i, count_table[i]);
         }
     }
 
     // Create and Initialize algo counters/temps
-    mpfr_t low, high, code_range;
+    mpfr_t low, high, code_range, temp;
     mpfr_init2(low, 256);
     mpfr_init2(high, 256);
     mpfr_init2(code_range, 256);
+    mpfr_init2(temp, 256);
     mpfr_set_d(low, 0, rnd);
     mpfr_set_d(high, 1.0, rnd);
 
@@ -80,7 +66,13 @@ int main(void)
     char output_buffer[1024] = {0};
     mpfr_exp_t expptr;
     mpfr_get_str(output_buffer, &expptr, 10, 0, low, rnd);
-    mpfr_printf("0.%s\n", output_buffer, expptr, low, high);
+    // mpfr_printf("0.%s\n", output_buffer);
+    mpfr_printf("%.71Rf\n", low);
+#ifdef DEBUG
+    char output_buffer_high[1024] = {0};
+    mpfr_get_str(output_buffer_high, &expptr, 10, 0, high, rnd);
+    mpfr_fprintf(stderr, "aencode: 0.%s 0.%s %RNe\n", output_buffer, output_buffer_high, low);
+#endif
 
     // Release memory
     mpfr_clear(low);
