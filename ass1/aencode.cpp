@@ -42,10 +42,10 @@ int main(void)
 
     // Create and Initialize algo counters/temps
     mpfr_t low, high, code_range, temp;
-    mpfr_init2(low, 256);
-    mpfr_init2(high, 256);
-    mpfr_init2(code_range, 256);
-    mpfr_init2(temp, 256);
+    mpfr_init2(low, AC_BITS);
+    mpfr_init2(high, AC_BITS);
+    mpfr_init2(code_range, AC_BITS);
+    mpfr_init2(temp, AC_BITS);
     mpfr_set_d(low, 0, rnd);
     mpfr_set_d(high, 1.0, rnd);
 
@@ -66,8 +66,8 @@ int main(void)
     char output_buffer[1024] = {0};
     mpfr_exp_t expptr;
     mpfr_get_str(output_buffer, &expptr, 10, 0, low, rnd);
-    // mpfr_printf("0.%s\n", output_buffer);
-    mpfr_printf("%.71Rf\n", low);
+    mpfr_printf("0.%s\n", output_buffer);
+    puts(output_buffer);
 #ifdef DEBUG
     char output_buffer_high[1024] = {0};
     mpfr_get_str(output_buffer_high, &expptr, 10, 0, high, rnd);

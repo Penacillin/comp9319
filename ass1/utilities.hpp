@@ -3,6 +3,9 @@
 #include <gmp.h>
 #include <mpfr.h>
 
+#define AC_BITS 2048
+
+
 // This mode specifies round-to-nearest
 mpfr_rnd_t rnd = MPFR_RNDN;
 

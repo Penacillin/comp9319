@@ -11,9 +11,7 @@
 
 mpfr_t MPFR_EPSILON;
 
-// A < B - E
-// A - B < -E
-// B - A > E
+// check if val_1 < val_2 outside by outside a margin of epsilon
 bool my_mpfr_less(const mpfr_t val_1, const mpfr_t val_2) {
     mpfr_t temp;
     mpfr_init2(temp, 256);
@@ -27,9 +25,7 @@ bool my_mpfr_less(const mpfr_t val_1, const mpfr_t val_2) {
     return false;
 }
 
-// A >= B - E
-// A - B >= -E
-// B - A <= E
+// checks if val_1 >= val_2 within a margin of epsilon
 bool my_mpfr_greaterequal_p(const mpfr_t val_1, const mpfr_t val_2) {
     mpfr_t temp;
     mpfr_init2(temp, 256);
@@ -66,7 +62,10 @@ char get_symbol_for_code(const mpfr_t ac_val,
 int main(void)
 {
     mpfr_init2(MPFR_EPSILON, 256);
-    mpfr_set_str(MPFR_EPSILON, "0.000000000000000000000000000000000000000000000000000000000000005", 10, rnd);
+    mpfr_set_str(
+        MPFR_EPSILON,
+        "0.000000000000000000000000000000000000000000000000000000000000001",
+        10, rnd);
     std::locale loc;
 
     int count_table[256] = {0};
@@ -74,7 +73,7 @@ int main(void)
     mpfr_t low_table[256];
     mpfr_t high_table[256];
     mpfr_t ac_val;
-    mpfr_init2(ac_val, 256);
+    mpfr_init2(ac_val, AC_BITS);
     char buffer[MAX_LENGTH];
     // count each char in input
     while (fgets(buffer, MAX_LENGTH, stdin) != NULL)
@@ -100,7 +99,7 @@ int main(void)
 #endif
 
     mpfr_t code_range;
-    mpfr_init2(code_range, 256);
+    mpfr_init2(code_range, AC_BITS);
     for (size_t i = 0; i < char_count; ++i) {
         char symbol = get_symbol_for_code(ac_val, count_table, low_table, high_table);
         putchar(symbol);
