@@ -44,7 +44,7 @@ int main(void)
     mpfr_t low, high, code_range, temp;
     mpfr_init2(low, AC_BITS);
     mpfr_init2(high, AC_BITS);
-    mpfr_init2(code_range, LOW_HIGH_BITS);
+    mpfr_init2(code_range, AC_BITS);
     mpfr_init2(temp, AC_BITS);
     mpfr_set_d(low, 0, rnd);
     mpfr_set_d(high, 1.0, rnd);
@@ -52,7 +52,8 @@ int main(void)
     for (size_t i = 0; i < char_count; ++i)
     {
         char c = input[i];
-        mpfr_sub(code_range, high, low, rnd);
+        int res = mpfr_sub(code_range, high, low, rnd);
+        if (res != 0) mpfr_fprintf(stderr, "aencode [WARNING]: high-low inexact\n");
 
         // high = low + range*high_range(symbol)
         mpfr_mul(temp, code_range, high_table[(size_t)c], rnd);
@@ -63,30 +64,35 @@ int main(void)
         mpfr_add(low, low, temp, rnd);
     }
 
-    char output_buffer[2048] = {0};
+    char output_buffer_low[2048] = {0};
     char output_buffer_high[2048] = {0};
-    char output_buffer_real[2048] = {0};
+    char output_buffer_real_low[2048] = {0};
+    char output_buffer_real_high[2048] = {0};
     size_t output_exp_offset = 0;
     mpfr_exp_t expptr;
-    mpfr_get_str(output_buffer, &expptr, 10, 0, low, rnd);
+    mpfr_get_str(output_buffer_low, &expptr, 10, 0, low, rnd);
     mpfr_get_str(output_buffer_high, &expptr, 10, 0, high, rnd);
 
     output_exp_offset = (size_t)-1*expptr;
-    for (size_t i = 0; i < output_exp_offset; ++i) output_buffer_real[i] = '0';
+    for (size_t i = 0; i < output_exp_offset; ++i) {
+        output_buffer_real_low[i] = '0';
+        output_buffer_real_high[i] = '0';
+    }
 
     size_t output_length = 0;
-    for (; output_length < strlen(output_buffer); ++output_length) {
-        output_buffer_real[output_length+output_exp_offset] = output_buffer[output_length];
-        if (output_buffer[output_length] < output_buffer_high[output_length] - 1) {
-            output_buffer_real[output_length+output_exp_offset]++;
+    for (; output_length < strlen(output_buffer_low); ++output_length) {
+        output_buffer_real_low[output_length+output_exp_offset] = output_buffer_low[output_length];
+        output_buffer_real_high[output_length+output_exp_offset] = output_buffer_high[output_length];
+        if (output_buffer_low[output_length] < output_buffer_high[output_length] - 1) {
+            output_buffer_real_low[output_length+output_exp_offset]++;
             break;
         }
     }
 
-    printf("0.%s\n", output_buffer_real);
+    printf("0.%s 0.%s\n", output_buffer_real_low, output_buffer_real_high   );
 #ifdef DEBUG
-    mpfr_fprintf(stderr, "aencode: %d(%d)\n0.%s\n0.%s\n0.%s\n", expptr, output_exp_offset,
-        output_buffer_real, output_buffer, output_buffer_high);
+    mpfr_fprintf(stderr, "aencode: %d(%d)\n0.%s\n0.%s\n0.%s\n0.%s\n", expptr, output_exp_offset,
+        output_buffer_real_low, output_buffer_real_high, output_buffer_low, output_buffer_high);
 #endif
 
     // Release memory

@@ -3,7 +3,7 @@
 #include <gmp.h>
 #include <mpfr.h>
 
-#define AC_BITS 2048
+#define AC_BITS 4096
 #define LOW_HIGH_BITS 256
 
 

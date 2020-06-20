@@ -64,7 +64,7 @@ int main(void)
     mpfr_init2(MPFR_EPSILON, AC_BITS);
     mpfr_set_str(
         MPFR_EPSILON,
-        "0.0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001",
+        "0.000000000000000000000000001",
         10, rnd);
     std::locale loc;
 
@@ -99,13 +99,23 @@ int main(void)
 #endif
 
     mpfr_t code_range;
-    mpfr_init2(code_range, AC_BITS);
+    mpfr_init2(code_range, LOW_HIGH_BITS);
     for (size_t i = 0; i < char_count; ++i) {
         char symbol = get_symbol_for_code(ac_val, count_table, low_table, high_table);
         putchar(symbol);
-        mpfr_sub(code_range, high_table[(size_t)symbol], low_table[(size_t)symbol], rnd);
-        mpfr_sub(ac_val, ac_val, low_table[(size_t)symbol], rnd);
-        mpfr_div(ac_val, ac_val, code_range, rnd);
+
+        int res = mpfr_sub(code_range, high_table[(size_t)symbol], low_table[(size_t)symbol], rnd);
+        if (res != 0) mpfr_fprintf(stderr, "adecode [WARNING]: high-low inexact\n");
+
+        res = mpfr_sub(ac_val, ac_val, low_table[(size_t)symbol], rnd);
+        if (res != 0) mpfr_fprintf(stderr, "adecode [WARNING]: high-low inexact\n");
+
+        res = mpfr_div(ac_val, ac_val, code_range, rnd);
+#ifdef DEBUG
+        if (res != 0) {
+            mpfr_fprintf(stderr, "adecode: %c %d /%.9Rf=%.36Rf\n", symbol, res, code_range, ac_val);
+        }
+#endif
     }
     mpfr_clear(code_range);
 
