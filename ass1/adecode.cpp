@@ -14,7 +14,7 @@ mpfr_t MPFR_EPSILON;
 // check if val_1 < val_2 outside by outside a margin of epsilon
 bool my_mpfr_less(const mpfr_t val_1, const mpfr_t val_2) {
     mpfr_t temp;
-    mpfr_init2(temp, 256);
+    mpfr_init2(temp, AC_BITS);
     mpfr_sub(temp, val_2, val_1, rnd);
     // mpfr_fprintf(stderr, "adecode: my_mpfr_less: %.75Rf-%.75Rf=%.75Rf>%.75Rf\n", val_2, val_1, temp, MPFR_EPSILON);
     if (mpfr_greater_p(temp, MPFR_EPSILON)) {
@@ -28,7 +28,7 @@ bool my_mpfr_less(const mpfr_t val_1, const mpfr_t val_2) {
 // checks if val_1 >= val_2 within a margin of epsilon
 bool my_mpfr_greaterequal_p(const mpfr_t val_1, const mpfr_t val_2) {
     mpfr_t temp;
-    mpfr_init2(temp, 256);
+    mpfr_init2(temp, AC_BITS);
     mpfr_sub(temp, val_2, val_1, rnd);
     // mpfr_fprintf(stderr, "adecode: my_mpfr_greaterequal_p: %.75Rf-%.75Rf=%.75Rf>%.75Rf\n",
     //              val_1, val_2, temp, MPFR_EPSILON);
@@ -61,10 +61,10 @@ char get_symbol_for_code(const mpfr_t ac_val,
 
 int main(void)
 {
-    mpfr_init2(MPFR_EPSILON, 256);
+    mpfr_init2(MPFR_EPSILON, AC_BITS);
     mpfr_set_str(
         MPFR_EPSILON,
-        "0.000000000000000000000000000000000000000000000000000000000000001",
+        "0.0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001",
         10, rnd);
     std::locale loc;
 
@@ -93,7 +93,7 @@ int main(void)
 #ifdef DEBUG
     for (int i = 0; i < 256; ++i) {
         if (count_table[i] > 0)
-            mpfr_printf("adecode: %c %d %.9Rf %.9Rf\n", i, count_table[i], low_table[i], high_table[i]);
+            mpfr_fprintf(stderr, "adecode: %c %d %.9Rf %.9Rf\n", i, count_table[i], low_table[i], high_table[i]);
     }
     mpfr_fprintf(stderr, "adecode: ac_val: %.16Rf\n", ac_val);
 #endif

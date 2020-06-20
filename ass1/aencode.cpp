@@ -44,34 +44,49 @@ int main(void)
     mpfr_t low, high, code_range, temp;
     mpfr_init2(low, AC_BITS);
     mpfr_init2(high, AC_BITS);
-    mpfr_init2(code_range, AC_BITS);
+    mpfr_init2(code_range, LOW_HIGH_BITS);
     mpfr_init2(temp, AC_BITS);
     mpfr_set_d(low, 0, rnd);
     mpfr_set_d(high, 1.0, rnd);
 
     for (size_t i = 0; i < char_count; ++i)
     {
-        size_t c = (size_t)input[i];
+        char c = input[i];
         mpfr_sub(code_range, high, low, rnd);
 
         // high = low + range*high_range(symbol)
-        mpfr_mul(temp, code_range, high_table[c], rnd);
+        mpfr_mul(temp, code_range, high_table[(size_t)c], rnd);
         mpfr_add(high, low, temp, rnd);
 
         // low = low + range*low_range(symbol)
-        mpfr_mul(temp, code_range, low_table[c], rnd);
+        mpfr_mul(temp, code_range, low_table[(size_t)c], rnd);
         mpfr_add(low, low, temp, rnd);
     }
 
-    char output_buffer[1024] = {0};
+    char output_buffer[2048] = {0};
+    char output_buffer_high[2048] = {0};
+    char output_buffer_real[2048] = {0};
+    size_t output_exp_offset = 0;
     mpfr_exp_t expptr;
     mpfr_get_str(output_buffer, &expptr, 10, 0, low, rnd);
-    mpfr_printf("0.%s\n", output_buffer);
-    puts(output_buffer);
-#ifdef DEBUG
-    char output_buffer_high[1024] = {0};
     mpfr_get_str(output_buffer_high, &expptr, 10, 0, high, rnd);
-    mpfr_fprintf(stderr, "aencode: 0.%s 0.%s %RNe\n", output_buffer, output_buffer_high, low);
+
+    output_exp_offset = (size_t)-1*expptr;
+    for (size_t i = 0; i < output_exp_offset; ++i) output_buffer_real[i] = '0';
+
+    size_t output_length = 0;
+    for (; output_length < strlen(output_buffer); ++output_length) {
+        output_buffer_real[output_length+output_exp_offset] = output_buffer[output_length];
+        if (output_buffer[output_length] < output_buffer_high[output_length] - 1) {
+            output_buffer_real[output_length+output_exp_offset]++;
+            break;
+        }
+    }
+
+    printf("0.%s\n", output_buffer_real);
+#ifdef DEBUG
+    mpfr_fprintf(stderr, "aencode: %d(%d)\n0.%s\n0.%s\n0.%s\n", expptr, output_exp_offset,
+        output_buffer_real, output_buffer, output_buffer_high);
 #endif
 
     // Release memory
