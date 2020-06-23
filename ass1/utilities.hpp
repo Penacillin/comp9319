@@ -20,7 +20,7 @@ void initialize_low_high_table(const int (&count_table)[Size],
     mpfr_t range_counter;
     mpfr_init2(range_counter, LOW_HIGH_BITS);
     mpfr_set_d(range_counter, 0.0, rnd);
-    for (int i = 0; i < 256; ++i)
+    for (size_t i = 0; i < Size; ++i)
     {
         mpfr_init2(low_table[i], LOW_HIGH_BITS);
         mpfr_init2(high_table[i], LOW_HIGH_BITS);
@@ -32,4 +32,9 @@ void initialize_low_high_table(const int (&count_table)[Size],
         }
     }
     mpfr_clear(range_counter);
+}
+
+template<size_t Size>
+void clear_mpfr_array(mpfr_t (&arr)[Size]) {
+    for (size_t i = 0; i < Size; ++i) mpfr_clear(arr[i]);
 }

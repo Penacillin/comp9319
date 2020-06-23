@@ -16,7 +16,6 @@ bool my_mpfr_less(const mpfr_t val_1, const mpfr_t val_2) {
     mpfr_t temp;
     mpfr_init2(temp, AC_BITS);
     mpfr_sub(temp, val_2, val_1, rnd);
-    // mpfr_fprintf(stderr, "adecode: my_mpfr_less: %.75Rf-%.75Rf=%.75Rf>%.75Rf\n", val_2, val_1, temp, MPFR_EPSILON);
     if (mpfr_greater_p(temp, MPFR_EPSILON)) {
         mpfr_clear(temp);
         return true;
@@ -30,8 +29,6 @@ bool my_mpfr_greaterequal_p(const mpfr_t val_1, const mpfr_t val_2) {
     mpfr_t temp;
     mpfr_init2(temp, AC_BITS);
     mpfr_sub(temp, val_2, val_1, rnd);
-    // mpfr_fprintf(stderr, "adecode: my_mpfr_greaterequal_p: %.75Rf-%.75Rf=%.75Rf>%.75Rf\n",
-    //              val_1, val_2, temp, MPFR_EPSILON);
     if (mpfr_lessequal_p(temp, MPFR_EPSILON)) {
         mpfr_clear(temp);
         return true;
@@ -64,7 +61,7 @@ int main(void)
     mpfr_init2(MPFR_EPSILON, AC_BITS);
     mpfr_set_str(
         MPFR_EPSILON,
-        "0.000000000000000000000000001",
+        "0.0000001",
         10, rnd);
     std::locale loc;
 
@@ -82,8 +79,7 @@ int main(void)
             mpfr_strtofr(ac_val, buffer, nullptr, 10, rnd);
             break;
         }
-        char c;
-        sscanf(buffer, "%c", &c);
+        char c = buffer[0];
         count_table[(size_t)c] = strtol(buffer + 2, nullptr, 10);
         char_count += count_table[(size_t)c];
     }
@@ -118,6 +114,8 @@ int main(void)
 #endif
     }
     mpfr_clear(code_range);
+    clear_mpfr_array(low_table);
+    clear_mpfr_array(high_table);
 
     return 0;
 }
