@@ -9,14 +9,12 @@
 
 #define MAX_LENGTH 2048
 
-mpfr_t MPFR_EPSILON;
-
 // check if val_1 < val_2 outside by outside a margin of epsilon
-bool my_mpfr_less(const mpfr_t val_1, const mpfr_t val_2) {
+bool my_mpfr_less(const mpfr_t val_1, const mpfr_t val_2, const mpfr_t epsilon) {
     mpfr_t temp;
     mpfr_init2(temp, AC_BITS);
     mpfr_sub(temp, val_2, val_1, rnd);
-    if (mpfr_greater_p(temp, MPFR_EPSILON)) {
+    if (mpfr_greater_p(temp, epsilon)) {
         mpfr_clear(temp);
         return true;
     }
@@ -25,11 +23,11 @@ bool my_mpfr_less(const mpfr_t val_1, const mpfr_t val_2) {
 }
 
 // checks if val_1 >= val_2 within a margin of epsilon
-bool my_mpfr_greaterequal_p(const mpfr_t val_1, const mpfr_t val_2) {
+bool my_mpfr_greaterequal_p(const mpfr_t val_1, const mpfr_t val_2, const mpfr_t epsilon) {
     mpfr_t temp;
     mpfr_init2(temp, AC_BITS);
     mpfr_sub(temp, val_2, val_1, rnd);
-    if (mpfr_lessequal_p(temp, MPFR_EPSILON)) {
+    if (mpfr_lessequal_p(temp, epsilon)) {
         mpfr_clear(temp);
         return true;
     }
@@ -41,13 +39,12 @@ template<size_t Size>
 char get_symbol_for_code(const mpfr_t ac_val,
                          const int (&count_table)[Size],
                          const mpfr_t (&low_table)[Size],
-                         const mpfr_t (&high_table)[Size]) {
-    // mpfr_fprintf(stderr, "get_symbol_for_code: %.15Rf\n", ac_val);
+                         const mpfr_t (&high_table)[Size],
+                         const mpfr_t epsilon) {
     for (size_t i = 0; i < Size; ++i) {
         if (count_table[i] > 0 &&
-                my_mpfr_greaterequal_p(ac_val, low_table[i]) &&
-                my_mpfr_less(ac_val, high_table[i])) {
-            // mpfr_fprintf(stderr, "%.9Rf <= %.70Rf < %.70Rf\n", low_table[i], ac_val, high_table[i]);
+                my_mpfr_greaterequal_p(ac_val, low_table[i], epsilon) &&
+                my_mpfr_less(ac_val, high_table[i], epsilon)) {
             return (char) i;
         }
     }
@@ -58,11 +55,9 @@ char get_symbol_for_code(const mpfr_t ac_val,
 
 int main(void)
 {
+    mpfr_t MPFR_EPSILON;
     mpfr_init2(MPFR_EPSILON, AC_BITS);
-    mpfr_set_str(
-        MPFR_EPSILON,
-        "0.000000000001",
-        10, rnd);
+    mpfr_set_str(MPFR_EPSILON, "0.000000000001", 10, rnd);
     std::locale loc;
 
     int count_table[256] = {0};
@@ -95,7 +90,8 @@ int main(void)
     mpfr_t code_range;
     mpfr_init2(code_range, LOW_HIGH_BITS);
     for (size_t i = 0; i < char_count; ++i) {
-        char symbol = get_symbol_for_code(ac_val, count_table, low_table, high_table);
+        const char symbol = get_symbol_for_code(
+            ac_val, count_table, low_table, high_table, MPFR_EPSILON);
         putchar(symbol);
 
         int res = mpfr_sub(code_range, high_table[(size_t)symbol], low_table[(size_t)symbol], rnd);
@@ -111,9 +107,12 @@ int main(void)
         }
 #endif
     }
+
     mpfr_clear(code_range);
+    mpfr_clear(ac_val);
+    mpfr_clear(MPFR_EPSILON);
     clear_mpfr_array(low_table);
     clear_mpfr_array(high_table);
-
+    mpfr_free_cache();
     return 0;
 }

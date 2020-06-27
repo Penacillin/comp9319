@@ -28,7 +28,7 @@ void print_fraction_with_radix(const char (&fraction)[Size],
 int main(void)
 {
     // read input
-    char input[MAX_LENGTH + 1] = {0};
+    char input[MAX_LENGTH + 2] = {0};
     const size_t char_count = fread(input, sizeof(char), MAX_LENGTH, stdin);
     // fprintf(stderr, "char_count: %lu\n", char_count);
     int count_table[256] = {0};
@@ -118,10 +118,12 @@ int main(void)
     // Release memory
     mpfr_clear(low);
     mpfr_clear(high);
+    mpfr_clear(code_range);
+    mpfr_clear(temp);
     clear_mpfr_array(low_table);
     clear_mpfr_array(high_table);
     mpfr_free_str(output_buffer_low);
     mpfr_free_str(output_buffer_high);
-
+    mpfr_free_cache();
     return 0;
 }
