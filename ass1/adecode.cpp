@@ -71,17 +71,16 @@ int main(void)
     mpfr_t high_table[256];
     mpfr_t ac_val;
     mpfr_init2(ac_val, AC_BITS);
+
     char buffer[MAX_LENGTH];
-    // count each char in input
-    while (fgets(buffer, MAX_LENGTH, stdin) != NULL) {
-        if (buffer[1] == '.') {
-            mpfr_strtofr(ac_val, buffer, nullptr, 10, rnd);
-            break;
-        }
-        char c = buffer[0];
-        count_table[(size_t)c] = strtol(buffer + 2, nullptr, 10);
-        char_count += count_table[(size_t)c];
+    char c;
+    int count_temp;
+    while (scanf("%c %d\n", &c, &count_temp) >= 2) {
+        char_count += count_table[(size_t)c] = count_temp;
     }
+    fgets(buffer+1, MAX_LENGTH, stdin);
+    buffer[0] = c;
+    mpfr_strtofr(ac_val, buffer, nullptr, 10, rnd);
 
     initialize_low_high_table(count_table, char_count, low_table, high_table);
 
