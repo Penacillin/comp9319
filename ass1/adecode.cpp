@@ -61,7 +61,7 @@ int main(void)
     mpfr_init2(MPFR_EPSILON, AC_BITS);
     mpfr_set_str(
         MPFR_EPSILON,
-        "0.0000001",
+        "0.000000000001",
         10, rnd);
     std::locale loc;
 
@@ -73,8 +73,7 @@ int main(void)
     mpfr_init2(ac_val, AC_BITS);
     char buffer[MAX_LENGTH];
     // count each char in input
-    while (fgets(buffer, MAX_LENGTH, stdin) != NULL)
-    {
+    while (fgets(buffer, MAX_LENGTH, stdin) != NULL) {
         if (buffer[1] == '.') {
             mpfr_strtofr(ac_val, buffer, nullptr, 10, rnd);
             break;

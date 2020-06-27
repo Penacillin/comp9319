@@ -1,4 +1,4 @@
-CC=g++
+CXX=g++
 CFLAGS=-Wextra -Wall -Werror --std=c++11
 
 default: executables
@@ -9,10 +9,10 @@ debug: executables
 executables: aencode adecode
 
 aencode: aencode.cpp utilities.hpp
-	$(CC) $(CFLAGS) -o $@ $< -lmpfr -lgmp
+	$(CXX) $(CFLAGS) -o $@ $< -lmpfr -lgmp
 
 adecode: adecode.cpp utilities.hpp
-	$(CC) $(CFLAGS) -o $@ $< -lmpfr -lgmp
+	$(CXX) $(CFLAGS) -o $@ $< -lmpfr -lgmp
 
 remake: clean default
 
