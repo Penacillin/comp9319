@@ -6,6 +6,9 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <errno.h>
+#include <assert.h>
+
+#define ENDING_CHAR '\n'
 
 typedef struct _rank_entry {
     char symbol;
@@ -14,7 +17,12 @@ typedef struct _rank_entry {
 
 typedef struct _BWTDecode {
     RankEntry rankTable[1024];
+    unsigned rankTableStart;
+    unsigned rankTableEnd;
+    unsigned rankTableSize;
     char in_buffer[1024];
+
+    unsigned endingCharRankIndex;
 
     unsigned CTable[128];
     unsigned runCount[128];
@@ -22,7 +30,7 @@ typedef struct _BWTDecode {
     int bwt_file_fd;
 } BWTDecode;
 
-char LANGUAGE_INDEXES [5] = {'\n', 'A', 'C', 'G', 'T'};
+const char LANGUAGE[5] = {'\n', 'A', 'C', 'G', 'T'};
 
 static inline unsigned get_char_index(const char c) {
     switch(c)  {
@@ -32,6 +40,7 @@ static inline unsigned get_char_index(const char c) {
         case 'G': return 3;
         case 'T': return 4;
     };
+    fprintf(stderr, "nani tf >%d<\n", c);
     exit(1);
 }
 
@@ -59,22 +68,40 @@ void build_tables(BWTDecode *decode_info) {
     ssize_t k;
     unsigned curr_index = 0;
     while((k = read(decode_info->bwt_file_fd, decode_info->in_buffer, 1024)) > 0) {
+        decode_info->rankTableStart = curr_index;
         for (ssize_t i = 0; i < k; ++i) {
             // Add to all CTable above char
             const char c = decode_info->in_buffer[i];
-            for (unsigned j = get_char_index(c) + 1; j < 5; ++j) {
-                ++(decode_info->CTable[(unsigned)LANGUAGE_INDEXES[j]]);
+            if (c == 0) {
+                fprintf(stderr, "unlucky %ld %ld %d\n", k, i, curr_index);
             }
-            decode_info->rankTable[curr_index] = (RankEntry){c, 0};
+            for (unsigned j = get_char_index(c) + 1; j < 5; ++j) {
+                ++(decode_info->CTable[(unsigned)LANGUAGE[j]]);
+            }
+            decode_info->rankTable[i] = (RankEntry){c, decode_info->runCount[(unsigned)c]++};
+            ++curr_index;
         }
-        ++curr_index;
+        decode_info->rankTableEnd = curr_index;
+        decode_info->rankTableSize = k;
     }
 }
 
 void print_ctable(const BWTDecode *decode_info) {
     for (unsigned i = 0; i < 5; ++i) {
-        printf("%c: %d\n", LANGUAGE_INDEXES[i], decode_info->CTable[(unsigned)LANGUAGE_INDEXES[i]]);
+        printf("%c: %d\n", LANGUAGE[i], decode_info->CTable[(unsigned)LANGUAGE[i]]);
     }
+}
+
+void print_ranktable(const BWTDecode *decode_info) {
+    for (unsigned i = 0; i < decode_info->rankTableSize; ++i) {
+        fprintf(stderr, "%d %c %d\n",
+            i, decode_info->rankTable[i].symbol, decode_info->rankTable[i].matching);
+    }
+}
+
+void ensure_in_rank_table(BWTDecode *decode_info, const unsigned index) {
+    assert((decode_info->rankTableStart <= index && decode_info->rankTableEnd >= index));
+    return;
 }
 
 int do_stuff2(BWTDecode *decode_info,
@@ -88,17 +115,45 @@ int do_stuff2(BWTDecode *decode_info,
         exit(1);
     }
 
-    (void)out_fd;
-    (void)file_size;
     (void)a2;
 
     build_tables(decode_info);
     print_ctable(decode_info);
+    print_ranktable(decode_info);
+
+    unsigned index = decode_info->CTable[ENDING_CHAR];
+    printf("starting index %d\n", index);
+
+    char output_buffer[1024];
+    unsigned output_buffer_index = sizeof(output_buffer) - 1;
+    output_buffer[output_buffer_index--] = ENDING_CHAR;
+    --file_size;
+
+    while (file_size > 0) {
+        ensure_in_rank_table(decode_info, index);
+        const char out_char = decode_info->rankTable[index].symbol;
+        output_buffer[output_buffer_index--] = out_char;
+
+        if (output_buffer_index == 0) {
+            lseek(out_fd, file_size, SEEK_SET);
+            write(out_fd, output_buffer, 1024);
+            output_buffer_index = sizeof(output_buffer) - 1;
+        }
+
+        index = decode_info->rankTable[index].matching + decode_info->CTable[(unsigned)out_char];
+
+        --file_size;
+    }
+
+    lseek(out_fd, file_size, SEEK_SET);
+    write(out_fd, output_buffer + output_buffer_index, sizeof(output_buffer) - output_buffer_index);
+
+    close(out_fd);
 
     return 0;
 }
 
-BWTDecode bwtDecode;
+BWTDecode bwtDecode = {.runCount = {0}, .CTable = {0}};
 
 int main(int argc, char** argv) {
     if (argc != 3) {
