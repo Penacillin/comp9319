@@ -48,8 +48,8 @@ static inline unsigned get_char_index(const char c) {
     };
 #ifdef DEBUG
     fprintf(stderr, "FATAL UNKOWN CHARACTER %d\n", c);
-    exit(1);
 #endif
+    exit(1);
 }
 
 // A C G T
@@ -84,7 +84,7 @@ void build_tables(BWTDecode *decode_info) {
         decode_info->rankTableStart = curr_index;
         assert(page_index < PAGE_TABLE_SIZE);
         for (unsigned i = 0; i < 4; ++i)
-            decode_info->runCountCum[page_index][i] = decode_info->runCount[LANGUAGE[i]];
+            decode_info->runCountCum[page_index][i] = decode_info->runCount[LANGUAGE[i+1]];
         ++page_index;
         for (ssize_t i = 0; i < k; ++i) {
             // Add to all CTable above char
@@ -114,14 +114,15 @@ void print_ranktable(const BWTDecode *decode_info) {
 }
 
 void ensure_in_rank_table(BWTDecode *decode_info, const unsigned index) {
-    if (decode_info->rankTableStart <= index && decode_info->rankTableEnd >= index) return;
+    if (decode_info->rankTableStart <= index && index < decode_info->rankTableEnd) return;
 
     const unsigned desired_page_index = index / TABLE_SIZE;
 #ifdef DEBUG
     fprintf(stderr, "Moving page to %d\n", desired_page_index);
 #endif
     decode_info->rankTableStart =  desired_page_index * TABLE_SIZE;
-    lseek(decode_info->bwt_file_fd, decode_info->rankTableStart, SEEK_SET);
+    off_t seek_res = lseek(decode_info->bwt_file_fd, decode_info->rankTableStart, SEEK_SET);
+    assert (seek_res != -1);
     const ssize_t read_bytes = read(decode_info->bwt_file_fd, decode_info->in_buffer, TABLE_SIZE);
     decode_info->rankTableEnd = decode_info->rankTableStart + read_bytes;
     decode_info->rankTableSize = read_bytes;
@@ -129,14 +130,14 @@ void ensure_in_rank_table(BWTDecode *decode_info, const unsigned index) {
     unsigned tempRunCount[128] = {0};
     // Load in char counts until this page
     for (unsigned i = 0; i < 4; ++i)
-        tempRunCount[LANGUAGE[i]] = decode_info->runCountCum[desired_page_index][i];
+        tempRunCount[LANGUAGE[i+1]] = decode_info->runCountCum[desired_page_index][i];
     // Fill out char counts for this page
     for (unsigned i = 0; i < read_bytes; ++i) {
         const char c = decode_info->in_buffer[i];
         decode_info->rankTable[i] = (RankEntry){c,  tempRunCount[(unsigned)c]++};
     }
 
-    assert((decode_info->rankTableStart <= index && decode_info->rankTableEnd >= index));
+    assert((decode_info->rankTableStart <= index && index < decode_info->rankTableEnd));
     return;
 }
 
@@ -154,8 +155,10 @@ int do_stuff2(BWTDecode *decode_info,
     (void)a2;
 
     build_tables(decode_info);
+#ifdef DEBUG
     print_ctable(decode_info);
     print_ranktable(decode_info);
+#endif
 
     unsigned index = decode_info->CTable[ENDING_CHAR];
     printf("starting index %d\n", index);
@@ -173,14 +176,18 @@ int do_stuff2(BWTDecode *decode_info,
 
         if (output_buffer_index == 0) {
             lseek(out_fd, file_size, SEEK_SET);
+#ifdef DEBUG
             printf("File Size %ld, index %d\n", file_size, index);
+#endif
             ssize_t res = write(out_fd, output_buffer, sizeof(output_buffer));
             if (res != sizeof(output_buffer)) exit(1);
             output_buffer_index = sizeof(output_buffer);
         }
 
         index = decode_info->rankTable[index % TABLE_SIZE].matching + decode_info->CTable[(unsigned)out_char];
+#ifdef DEBUG
         fprintf(stderr, "index: %d\n", index);
+#endif
     }
 
     lseek(out_fd, file_size, SEEK_SET);

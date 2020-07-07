@@ -1,6 +1,7 @@
 CXX=gcc
 CFLAGS=-Wextra -Wall -Werror --std=c11
 
+default: CFLAGS += -O2
 default: executables
 
 debug: CFLAGS += -DDEBUG -g
