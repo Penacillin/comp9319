@@ -27,7 +27,6 @@ typedef u_int32_t RankEntry;
 typedef struct _BWTDecode {
     u_int32_t runCount[128]; // 512
     u_int32_t runCountCum[PAGE_TABLE_SIZE][4]; // 245776
-    char in_buffer[TABLE_SIZE]; // 1024
     RankEntry rankTable[CACHE_SIZE][TABLE_SIZE]; // 10485760
     int16_t cache_clock; // 2
     int16_t cache_table[PAGE_TABLE_SIZE]; // 30772
@@ -56,13 +55,16 @@ static inline unsigned get_char_index(const char c) {
     };
 #ifdef DEBUG
     fprintf(stderr, "FATAL UNKOWN CHARACTER %d\n", c);
-#endif
     exit(1);
+#else
+    return 0;
+#endif
 }
-
-// A C G T
-// 0 2 6 9
+// A      C      G     T
+// 0      2      6     9
+// 0000   0010   0110  1001 
 // 0 1 2 3
+// 0000   0001   0010  0011
 
 off_t read_file(BWTDecode* decode_info, char *bwt_file_path) {
     int fd = open(bwt_file_path, O_RDONLY);
@@ -89,7 +91,8 @@ void build_tables(BWTDecode *decode_info) {
     unsigned curr_index = 0;
     unsigned page_index = 0;
     char replacing_caches = FALSE;
-    while((k = read(decode_info->bwt_file_fd, decode_info->in_buffer, TABLE_SIZE)) > 0) {
+    char in_buffer[TABLE_SIZE];
+    while((k = read(decode_info->bwt_file_fd, in_buffer, TABLE_SIZE)) > 0) {
         assert(page_index < PAGE_TABLE_SIZE);
         // Snapshot runCount
         for (unsigned i = 0; i < 4; ++i)
@@ -109,7 +112,7 @@ void build_tables(BWTDecode *decode_info) {
         decode_info->rankTableStart = curr_index;
         for (ssize_t i = 0; i < k; ++i) {
             // Add to all CTable above char
-            const char c = decode_info->in_buffer[i];
+            const char c = in_buffer[i];
             for (unsigned j = get_char_index(c) + 1; j < 5; ++j) {
                 ++(decode_info->CTable[(unsigned)LANGUAGE[j]]);
             }
@@ -150,7 +153,8 @@ u_int32_t ensure_in_rank_table(BWTDecode *decode_info, const unsigned index) {
     decode_info->rankTableStart =  desired_page_index * TABLE_SIZE;
     off_t seek_res = lseek(decode_info->bwt_file_fd, decode_info->rankTableStart, SEEK_SET);
     if (__glibc_unlikely(seek_res == -1)) exit(1);
-    const ssize_t read_bytes = read(decode_info->bwt_file_fd, decode_info->in_buffer, TABLE_SIZE);
+    char in_buffer[TABLE_SIZE];
+    const ssize_t read_bytes = read(decode_info->bwt_file_fd, in_buffer, TABLE_SIZE);
     decode_info->rankTableEnd = decode_info->rankTableStart + read_bytes;
     decode_info->rankTableSize = read_bytes;
 
@@ -170,8 +174,16 @@ u_int32_t ensure_in_rank_table(BWTDecode *decode_info, const unsigned index) {
         tempRunCount[LANGUAGE[i+1]] = decode_info->runCountCum[desired_page_index][i];
     // Fill out char counts for this page
     for (unsigned i = 0; i < read_bytes; ++i) {
-        const char c = decode_info->in_buffer[i];
-        decode_info->rankTable[decode_info->cache_clock][i] = (get_char_index(c) << 29) | tempRunCount[(unsigned)c]++;
+        const char c = in_buffer[i];
+        unsigned j = 0;
+        switch(c)  {
+            case 'A': j = 1; goto LABEL_BREAK_SWITCH;
+            case 'C': j = 2; goto LABEL_BREAK_SWITCH;
+            case 'G': j = 3; goto LABEL_BREAK_SWITCH;
+            case 'T': j = 4; goto LABEL_BREAK_SWITCH;
+        };
+LABEL_BREAK_SWITCH:
+        decode_info->rankTable[decode_info->cache_clock][i] = (j << 29) | tempRunCount[(unsigned)c]++;
     }
     reader_timer += ((double)clock() - t)/CLOCKS_PER_SEC;
 
