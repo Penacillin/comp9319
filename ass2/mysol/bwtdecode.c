@@ -11,9 +11,12 @@
 
 #define ENDING_CHAR '\n'
 #define TABLE_SIZE 4096
-#define PAGE_TABLE_SIZE (104857600/TABLE_SIZE+1)
-#define CACHE_SIZE 128
+#define PAGE_TABLE_SIZE (15728640/TABLE_SIZE+1)
+#define CACHE_SIZE 320
 #define OUTPUT_BUF_SIZE 999999
+
+#define FALSE 0
+#define TRUE 1
 
 typedef struct _rank_entry {
     char symbol;
@@ -25,8 +28,8 @@ typedef struct _BWTDecode {
     u_int32_t runCount[128];
     u_int32_t runCountCum[PAGE_TABLE_SIZE][4];
     RankEntry rankTable[CACHE_SIZE][TABLE_SIZE];
-    unsigned char cache_clock;
-    char cache_table[PAGE_TABLE_SIZE];
+    int16_t cache_clock;
+    int16_t cache_table[PAGE_TABLE_SIZE];
     u_int16_t cache_to_page[CACHE_SIZE];
     u_int32_t rankTableStart;
     u_int32_t rankTableEnd;
@@ -85,15 +88,21 @@ void build_tables(BWTDecode *decode_info) {
     ssize_t k;
     unsigned curr_index = 0;
     unsigned page_index = 0;
+    char replacing_caches = FALSE;
     while((k = read(decode_info->bwt_file_fd, decode_info->in_buffer, TABLE_SIZE)) > 0) {
         assert(page_index < PAGE_TABLE_SIZE);
         // Snapshot runCount
         for (unsigned i = 0; i < 4; ++i)
             decode_info->runCountCum[page_index][i] = decode_info->runCount[LANGUAGE[i+1]];
 
-        decode_info->cache_clock = (decode_info->cache_clock + 1) % CACHE_SIZE;
+        decode_info->cache_clock = decode_info->cache_clock + 1;
+        if (decode_info->cache_clock == CACHE_SIZE) {
+            decode_info->cache_clock = 0;
+            replacing_caches = TRUE;
+        }
         decode_info->cache_table[page_index] = decode_info->cache_clock; // page_index about to get cache
-        decode_info->cache_table[decode_info->cache_to_page[decode_info->cache_clock]] = -1; // update previous page that it's out of cache
+        if (replacing_caches)
+            decode_info->cache_table[decode_info->cache_to_page[decode_info->cache_clock]] = -1; // update previous page that it's out of cache
         decode_info->cache_to_page[decode_info->cache_clock] = page_index;
         ++page_index;
 
