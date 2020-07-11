@@ -150,6 +150,7 @@ void print_cumtable(const BWTDecode *decode_info) {
 }
 
 double reader_timer = 0;
+u_int64_t busy_waits = 0;
 
 char get_char_rank(const unsigned index, BWTDecode *decode_info, unsigned *next_index) {
     const unsigned page_index = index / TABLE_SIZE;
@@ -214,8 +215,11 @@ int do_stuff2(BWTDecode *decode_info,
     unsigned index = 0;
 
     char output_buffer[OUTPUT_BUF_SIZE];
+    char output_buffer2[OUTPUT_BUF_SIZE];
     struct aiocb aiocbp;
+    memset(&aiocbp, 0, sizeof(struct aiocb));
     char first_write = FALSE;
+    char aiocbp_curr = 0;
     aiocbp.aio_fildes = out_fd;
     aiocbp.aio_buf = output_buffer;
     aiocbp.aio_nbytes = OUTPUT_BUF_SIZE;
@@ -231,20 +235,32 @@ int do_stuff2(BWTDecode *decode_info,
         unsigned next_index;
         const char out_char = get_char_rank(index, decode_info, &next_index);
         index = next_index;
-        output_buffer[--output_buffer_index] = out_char;
+        if (aiocbp_curr == 0) {
+            output_buffer[--output_buffer_index] = out_char;
+        } else {
+            output_buffer2[--output_buffer_index] = out_char;
+        }
         --file_size;
 
         if (output_buffer_index == 0) {
-            while((res = aio_error(&aiocbp) && first_write) == EINPROGRESS);
+            while((res = aio_error(&aiocbp)) == EINPROGRESS && first_write) ++busy_waits;
             if (res != 0) exit(1);
 #ifdef DEBUG
             printf("File Size %ld, index %d\n", file_size, index);
 #endif
-            aiocbp.aio_offset = file_size;
-            res = aio_write(&aiocbp);
+            if (aiocbp_curr == 0) {
+                aiocbp.aio_offset = file_size;
+                aiocbp.aio_buf = output_buffer;
+                res = aio_write(&aiocbp);
+                aiocbp_curr = 1;
+            } else {
+                aiocbp.aio_offset = file_size;
+                aiocbp.aio_buf = output_buffer2;
+                res = aio_write(&aiocbp);
+                aiocbp_curr = 0;
+            }
             if (res != 0) exit(1);
             first_write = TRUE;
-
 
             output_buffer_index = sizeof(output_buffer);
         }
@@ -284,6 +300,7 @@ int main(int argc, char** argv) {
     close(bwtDecode.bwt_file_fd);
 
     printf("reader timer %lf\n", reader_timer);
+    printf("busy waits   %lu\n", busy_waits);
 
     return 0;
 }
