@@ -11,7 +11,7 @@
 #include <aio.h>
 
 #define ENDING_CHAR '\n'
-#define TABLE_SIZE 64
+#define TABLE_SIZE 32
 #define PAGE_TABLE_SIZE (15728640/TABLE_SIZE+1)
 #define RANK_ENTRY_SIZE 4
 #define BITS_PER_SYMBOL 2
@@ -165,8 +165,8 @@ char get_char_rank(const unsigned index, BWTDecode *decode_info, unsigned *next_
     unsigned rank_entry_index = char_index % RANK_ENTRY_SIZE;
     unsigned rank_index = char_index / RANK_ENTRY_SIZE;
     unsigned out_char;
-    // if (char_index <= decode_info->endingCharIndex && decode_info->endingCharIndex <= index)
-    //     --tempRunCount['T'];
+    if (char_index <= decode_info->endingCharIndex && decode_info->endingCharIndex <= index)
+        --tempRunCount['T'];
 
 #ifdef DEBUG
     fprintf(stderr, "Using page %d. rank_index %d\n", page_index, rank_index);
@@ -179,7 +179,7 @@ char get_char_rank(const unsigned index, BWTDecode *decode_info, unsigned *next_
             rank_entry_index = 0;
             ++rank_index;
         }
-        if (char_index != decode_info->endingCharIndex) ++tempRunCount[out_char];
+        ++tempRunCount[out_char];
         ++char_index;
     } while(char_index <= index);
     // reader_timer += ((double)clock() - t)/CLOCKS_PER_SEC;
