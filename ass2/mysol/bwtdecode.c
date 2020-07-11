@@ -11,13 +11,13 @@
 #include <aio.h>
 
 #define ENDING_CHAR '\n'
-#define TABLE_SIZE 32
+#define TABLE_SIZE 64
 #define PAGE_TABLE_SIZE (15728640/TABLE_SIZE+1)
 #define RANK_ENTRY_SIZE 4
 #define BITS_PER_SYMBOL 2
 #define RANK_TABLE_SIZE (15728640/RANK_ENTRY_SIZE) // 4 chars per 8 bits (2 bits per char)
 #define INPUT_BUF_SIZE 4096
-#define OUTPUT_BUF_SIZE 99999
+#define OUTPUT_BUF_SIZE 150000
 
 #define FALSE 0
 #define TRUE 1
@@ -165,6 +165,9 @@ char get_char_rank(const unsigned index, BWTDecode *decode_info, unsigned *next_
     unsigned rank_entry_index = char_index % RANK_ENTRY_SIZE;
     unsigned rank_index = char_index / RANK_ENTRY_SIZE;
     unsigned out_char;
+    // if (char_index <= decode_info->endingCharIndex && decode_info->endingCharIndex <= index)
+    //     --tempRunCount['T'];
+
 #ifdef DEBUG
     fprintf(stderr, "Using page %d. rank_index %d\n", page_index, rank_index);
 #endif
@@ -220,6 +223,7 @@ int do_stuff2(BWTDecode *decode_info,
     memset(&aiocbp, 0, sizeof(struct aiocb));
     char first_write = FALSE;
     char aiocbp_curr = 0;
+    int res;
     aiocbp.aio_fildes = out_fd;
     aiocbp.aio_buf = output_buffer;
     aiocbp.aio_nbytes = OUTPUT_BUF_SIZE;
@@ -228,7 +232,6 @@ int do_stuff2(BWTDecode *decode_info,
     output_buffer[--output_buffer_index] = ENDING_CHAR;
     --file_size;
     while (file_size > 0) {
-        int res;
 #ifdef DEBUG
         fprintf(stderr, "index: %d\n", index);
 #endif
@@ -266,16 +269,25 @@ int do_stuff2(BWTDecode *decode_info,
         }
     }
 
-    lseek(out_fd, file_size, SEEK_SET);
-    ssize_t res = write(
-        out_fd,
-        output_buffer + output_buffer_index,
-        sizeof(output_buffer) - output_buffer_index);
-    if (res == -1 || (unsigned)res != sizeof(output_buffer) - output_buffer_index) {
-        fprintf(stderr, "Error writing to file. Wrote %ld instead of %d\n", res, TABLE_SIZE);
-        exit(1);  
+    while((res = aio_error(&aiocbp)) == EINPROGRESS && first_write) ++busy_waits;
+    if (res != 0) exit(1);
+    if (aiocbp_curr == 0) {
+        aiocbp.aio_offset = file_size;
+        aiocbp.aio_buf = output_buffer + output_buffer_index;
+        aiocbp.aio_nbytes = sizeof(output_buffer) - output_buffer_index;
+        res = aio_write(&aiocbp);
+        aiocbp_curr = 1;
+    } else {
+        aiocbp.aio_offset = file_size;
+        aiocbp.aio_buf = output_buffer2 + output_buffer_index;
+        aiocbp.aio_nbytes = sizeof(output_buffer) - output_buffer_index;
+        res = aio_write(&aiocbp);
+        aiocbp_curr = 0;
     }
-
+    first_write = TRUE;
+    if (res != 0) exit(1);
+    while((res = aio_error(&aiocbp)) == EINPROGRESS && first_write) ++busy_waits;
+    if (res != 0) exit(1);
     close(out_fd);
 
     return 0;
