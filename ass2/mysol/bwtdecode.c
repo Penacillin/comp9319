@@ -8,6 +8,7 @@
 #include <errno.h>
 #include <assert.h>
 #include <time.h>
+#include <aio.h>
 
 #define ENDING_CHAR '\n'
 #define TABLE_SIZE 32
@@ -213,6 +214,11 @@ int do_stuff2(BWTDecode *decode_info,
     unsigned index = 0;
 
     char output_buffer[OUTPUT_BUF_SIZE];
+    struct aiocb aiocbp;
+    aiocbp.aio_fildes = out_fd;
+    aiocbp.aio_buf = output_buffer;
+    aiocbp.aio_nbytes = OUTPUT_BUF_SIZE;
+
     unsigned output_buffer_index = sizeof(output_buffer);
     output_buffer[--output_buffer_index] = ENDING_CHAR;
     --file_size;
@@ -228,12 +234,17 @@ int do_stuff2(BWTDecode *decode_info,
         --file_size;
 
         if (output_buffer_index == 0) {
-            lseek(out_fd, file_size, SEEK_SET);
+            // lseek(out_fd, file_size, SEEK_SET);
 #ifdef DEBUG
             printf("File Size %ld, index %d\n", file_size, index);
 #endif
-            ssize_t res = write(out_fd, output_buffer, sizeof(output_buffer));
-            if (res != sizeof(output_buffer)) exit(1);
+            aiocbp.aio_offset = file_size;
+            int res = aio_write(&aiocbp);
+            if (res != 0) exit(1);
+
+            while((res = aio_error(&aiocbp)) == EINPROGRESS);
+            if (res != 0) exit(1);
+
             output_buffer_index = sizeof(output_buffer);
         }
     }

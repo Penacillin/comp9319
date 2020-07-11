@@ -1,5 +1,5 @@
 CXX=gcc
-CFLAGS=-Wextra -Wall -Werror --std=c11
+CFLAGS=-Wextra -Wall -Werror --std=c11 -lrt
 
 default: CFLAGS += -O3
 default: executables
