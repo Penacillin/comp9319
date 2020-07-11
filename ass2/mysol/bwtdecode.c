@@ -166,15 +166,16 @@ u_int32_t ensure_in_rank_table(BWTDecode *decode_info, const unsigned index) {
     decode_info->cache_table[decode_info->cache_to_page[decode_info->cache_clock]] = -1; // update previous page that it's out of cache
     decode_info->cache_to_page[decode_info->cache_clock] = desired_page_index;
 
-    clock_t t = clock();
+
     unsigned tempRunCount[128];
     tempRunCount['\n'] = 0;
     // Load in char counts until this page
     for (unsigned i = 0; i < 4; ++i)
         tempRunCount[LANGUAGE[i+1]] = decode_info->runCountCum[desired_page_index][i];
+    clock_t t = clock();
     // Fill out char counts for this page
     for (unsigned i = 0; i < read_bytes; ++i) {
-        const char c = in_buffer[i];
+        const unsigned c = in_buffer[i];
         unsigned j = 0;
         switch(c)  {
             case 'A': j = 1; goto LABEL_BREAK_SWITCH;
@@ -183,7 +184,7 @@ u_int32_t ensure_in_rank_table(BWTDecode *decode_info, const unsigned index) {
             case 'T': j = 4; goto LABEL_BREAK_SWITCH;
         };
 LABEL_BREAK_SWITCH:
-        decode_info->rankTable[decode_info->cache_clock][i] = (j << 29) | tempRunCount[(unsigned)c]++;
+        decode_info->rankTable[decode_info->cache_clock][i] = (j << 29) | tempRunCount[c]++;
     }
     reader_timer += ((double)clock() - t)/CLOCKS_PER_SEC;
 
@@ -229,7 +230,8 @@ int do_stuff2(BWTDecode *decode_info,
 
     while (file_size > 0) {
         const u_int32_t page_index = ensure_in_rank_table(decode_info, index);
-        const char out_char = LANGUAGE[((decode_info->rankTable[page_index][index % TABLE_SIZE] & SYMBOL_MASK) >> 29)];
+        const char out_char =
+            LANGUAGE[decode_info->rankTable[page_index][index % TABLE_SIZE] >> 29];
         output_buffer[--output_buffer_index] = out_char;
         --file_size;
 
