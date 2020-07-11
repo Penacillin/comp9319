@@ -215,6 +215,7 @@ int do_stuff2(BWTDecode *decode_info,
 
     char output_buffer[OUTPUT_BUF_SIZE];
     struct aiocb aiocbp;
+    char first_write = FALSE;
     aiocbp.aio_fildes = out_fd;
     aiocbp.aio_buf = output_buffer;
     aiocbp.aio_nbytes = OUTPUT_BUF_SIZE;
@@ -222,8 +223,8 @@ int do_stuff2(BWTDecode *decode_info,
     unsigned output_buffer_index = sizeof(output_buffer);
     output_buffer[--output_buffer_index] = ENDING_CHAR;
     --file_size;
-
     while (file_size > 0) {
+        int res;
 #ifdef DEBUG
         fprintf(stderr, "index: %d\n", index);
 #endif
@@ -234,16 +235,16 @@ int do_stuff2(BWTDecode *decode_info,
         --file_size;
 
         if (output_buffer_index == 0) {
-            // lseek(out_fd, file_size, SEEK_SET);
+            while((res = aio_error(&aiocbp) && first_write) == EINPROGRESS);
+            if (res != 0) exit(1);
 #ifdef DEBUG
             printf("File Size %ld, index %d\n", file_size, index);
 #endif
             aiocbp.aio_offset = file_size;
-            int res = aio_write(&aiocbp);
+            res = aio_write(&aiocbp);
             if (res != 0) exit(1);
+            first_write = TRUE;
 
-            while((res = aio_error(&aiocbp)) == EINPROGRESS);
-            if (res != 0) exit(1);
 
             output_buffer_index = sizeof(output_buffer);
         }
