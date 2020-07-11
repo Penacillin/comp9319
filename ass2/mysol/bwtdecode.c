@@ -27,12 +27,13 @@ typedef char RankEntry;
 
 typedef struct _BWTDecode {
     u_int32_t runCount[128]; // 512
-    u_int32_t runCountCum[PAGE_TABLE_SIZE][4]; // 245776 // using 4*32=128 bits per snapshot. Actually needs 96 bits
+    u_int32_t runCountCum[PAGE_TABLE_SIZE][4]; // 7864336 // using 4*32=128 bits per snapshot. Actually needs 96 bits
     RankEntry rankTable[RANK_TABLE_SIZE]; // 3932160
-    u_int32_t rankTableSize;
+    u_int32_t endingCharIndex;
     u_int32_t CTable[128]; // 512
-
     int bwt_file_fd; // 4
+
+    u_int32_t rankTableSize;
 } BWTDecode;
 
 const size_t BWTDECODE_SIZE = sizeof(struct _BWTDecode);
@@ -94,21 +95,25 @@ void build_tables(BWTDecode *decode_info) {
             for (unsigned j = 0; j < RANK_ENTRY_SIZE && i < k; ++j, ++i) {
                 // Snapshot runCount
                 if (curr_index % TABLE_SIZE == 0) {
-                    for (unsigned k = 0; k < 4; ++k)
-                        decode_info->runCountCum[page_index][k] = decode_info->runCount[LANGUAGE[k+1]];
+                    for (unsigned l = 0; l < 4; ++l)
+                        decode_info->runCountCum[page_index][l] = decode_info->runCount[LANGUAGE[l+1]];
                     ++page_index;
                     assert(page_index < PAGE_TABLE_SIZE);
                 }
 
                 const char c = in_buffer[i];
+                if (c == '\n') decode_info->endingCharIndex = curr_index;
                 // Add to all CTable above char
                 for (unsigned k = get_char_index(c) + 1; k < LANGUAGE_SIZE; ++k) {
                     ++(decode_info->CTable[LANGUAGE[k]]);
                 }
 
                 // Put symbol into rank array
-                decode_info->rankTable[rank_index] |=
+                decode_info->rankTable[rank_index] |= 
                     ((get_char_index(c)-1) & 0b11) << (j*BITS_PER_SYMBOL);
+
+                // Run count
+                ++decode_info->runCount[(unsigned)c];
 
                 ++curr_index;
             }
@@ -131,6 +136,16 @@ void print_ranktable(const BWTDecode *decode_info) {
         fprintf(stderr, "%d >%c<\n",
             i, LANGUAGE[((decode_info->rankTable[rank_index] >> (rank_entry_index*BITS_PER_SYMBOL)) & 0b11)+1]);
     }
+    printf("%d is endchar\n", decode_info->endingCharIndex);
+}
+
+void print_cumtable(const BWTDecode *decode_info) {
+    for (unsigned i = 0; i < 2; ++i) {
+        for (unsigned j = 0; j < 4; ++j) {
+            fprintf(stderr, "%u", decode_info->runCountCum[i][j]);
+        }
+        fprintf(stderr, "\n");
+    }
 }
 
 double reader_timer = 0;
@@ -151,7 +166,7 @@ char get_char_rank(const unsigned index, BWTDecode *decode_info, unsigned *next_
 #ifdef DEBUG
     fprintf(stderr, "Using page %d. rank_index %d\n", page_index, rank_index);
 #endif
-    for (; char_index <= index; ++char_index) {
+    do {
         out_char =
             LANGUAGE[((decode_info->rankTable[rank_index] >> (rank_entry_index*BITS_PER_SYMBOL)) & 0b11) + 1];
         ++rank_entry_index;
@@ -159,10 +174,14 @@ char get_char_rank(const unsigned index, BWTDecode *decode_info, unsigned *next_
             rank_entry_index = 0;
             ++rank_index;
         }
-        ++tempRunCount[out_char];
-    }
+        if (char_index != decode_info->endingCharIndex) ++tempRunCount[out_char];
+        ++char_index;
+    } while(char_index <= index);
     reader_timer += ((double)clock() - t)/CLOCKS_PER_SEC;
-    *next_index = tempRunCount[out_char] + decode_info->CTable[out_char];
+    *next_index = tempRunCount[out_char]-1 + decode_info->CTable[out_char];
+#ifdef DEBUG
+    printf("%c %d %d\n", out_char, tempRunCount[out_char]-1, decode_info->CTable[out_char]);
+#endif
     return (char)out_char;
 }
 
@@ -188,6 +207,7 @@ int do_stuff2(BWTDecode *decode_info,
 #ifdef DEBUG
     print_ctable(decode_info);
     print_ranktable(decode_info);
+    print_cumtable(decode_info);
 #endif
 
     unsigned index = decode_info->CTable[ENDING_CHAR];
@@ -198,6 +218,9 @@ int do_stuff2(BWTDecode *decode_info,
     --file_size;
 
     while (file_size > 0) {
+#ifdef DEBUG
+        fprintf(stderr, "index: %d\n", index);
+#endif
         unsigned next_index;
         const char out_char = get_char_rank(index, decode_info, &next_index);
         index = next_index;
@@ -213,9 +236,6 @@ int do_stuff2(BWTDecode *decode_info,
             if (res != sizeof(output_buffer)) exit(1);
             output_buffer_index = sizeof(output_buffer);
         }
-#ifdef DEBUG
-        fprintf(stderr, "index: %d\n", index);
-#endif
     }
 
     lseek(out_fd, file_size, SEEK_SET);
