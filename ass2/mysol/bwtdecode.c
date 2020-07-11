@@ -22,7 +22,7 @@
 #define FALSE 0
 #define TRUE 1
 
-// Use 2 bits per symbol. 4 bits per char/RankEntry
+// Use 2 bits per symbol. 4 symbols per char/RankEntry
 typedef char RankEntry;
 
 
@@ -108,12 +108,12 @@ void build_tables(BWTDecode *decode_info) {
                 for (unsigned k = get_char_index(c) + 1; k < LANGUAGE_SIZE; ++k) {
                     ++(decode_info->CTable[LANGUAGE[k]]);
                 }
-
+                // 00000000 00000000 00000000 00000000
                 // Put symbol into rank array
                 decode_info->rankTable[rank_index] |= 
                     ((get_char_index(c)-1) & 0b11) << (j*BITS_PER_SYMBOL);
 
-                // Run count
+                // Run count for rank table
                 ++decode_info->runCount[(unsigned)c];
 
                 ++curr_index;
@@ -143,7 +143,7 @@ void print_ranktable(const BWTDecode *decode_info) {
 void print_cumtable(const BWTDecode *decode_info) {
     for (unsigned i = 0; i < 2; ++i) {
         for (unsigned j = 0; j < 4; ++j) {
-            fprintf(stderr, "%u", decode_info->runCountCum[i][j]);
+            fprintf(stderr, "%u,", decode_info->runCountCum[i][j]);
         }
         fprintf(stderr, "\n");
     }
@@ -154,6 +154,13 @@ u_int64_t busy_waits = 0;
 
 char get_char_rank(const unsigned index, BWTDecode *decode_info, unsigned *next_index) {
     const unsigned page_index = index / TABLE_SIZE;
+    // int direction = 1;
+    // if (index % TABLE_SIZE > TABLE_SIZE / 2) {
+    //     direction = -1;
+    //     ++page_index;
+    // }
+
+
     unsigned tempRunCount[128];
     tempRunCount['\n'] = 0;
     // Load in char counts until this page
