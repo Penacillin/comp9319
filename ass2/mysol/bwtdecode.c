@@ -16,7 +16,7 @@
 #define BITS_PER_SYMBOL 2
 #define RANK_TABLE_SIZE (15728640/RANK_ENTRY_SIZE) // 4 chars per 8 bits (2 bits per char)
 #define INPUT_BUF_SIZE 4096
-#define OUTPUT_BUF_SIZE 999999
+#define OUTPUT_BUF_SIZE 99999
 
 #define FALSE 0
 #define TRUE 1
@@ -29,11 +29,11 @@ typedef struct _BWTDecode {
     u_int32_t runCount[128]; // 512
     u_int32_t runCountCum[PAGE_TABLE_SIZE][4]; // 7864336 // using 4*32=128 bits per snapshot. Actually needs 96 bits
     RankEntry rankTable[RANK_TABLE_SIZE]; // 3932160
-    u_int32_t endingCharIndex;
+    u_int32_t endingCharIndex; // 4
     u_int32_t CTable[128]; // 512
     int bwt_file_fd; // 4
 
-    u_int32_t rankTableSize;
+    u_int32_t rankTableSize; // 4
 } BWTDecode;
 
 const size_t BWTDECODE_SIZE = sizeof(struct _BWTDecode);
@@ -157,7 +157,7 @@ char get_char_rank(const unsigned index, BWTDecode *decode_info, unsigned *next_
     // Load in char counts until this page
     for (unsigned i = 0; i < 4; ++i)
         tempRunCount[LANGUAGE[i+1]] = decode_info->runCountCum[page_index][i];
-    clock_t t = clock();
+    // clock_t t = clock();
     // Fill out char counts for this page
     unsigned char_index = page_index * TABLE_SIZE;
     unsigned rank_entry_index = char_index % RANK_ENTRY_SIZE;
@@ -177,7 +177,7 @@ char get_char_rank(const unsigned index, BWTDecode *decode_info, unsigned *next_
         if (char_index != decode_info->endingCharIndex) ++tempRunCount[out_char];
         ++char_index;
     } while(char_index <= index);
-    reader_timer += ((double)clock() - t)/CLOCKS_PER_SEC;
+    // reader_timer += ((double)clock() - t)/CLOCKS_PER_SEC;
     *next_index = tempRunCount[out_char]-1 + decode_info->CTable[out_char];
 #ifdef DEBUG
     printf("%c %d %d\n", out_char, tempRunCount[out_char]-1, decode_info->CTable[out_char]);
@@ -210,7 +210,7 @@ int do_stuff2(BWTDecode *decode_info,
     print_cumtable(decode_info);
 #endif
 
-    unsigned index = decode_info->CTable[ENDING_CHAR];
+    unsigned index = 0;
 
     char output_buffer[OUTPUT_BUF_SIZE];
     unsigned output_buffer_index = sizeof(output_buffer);
