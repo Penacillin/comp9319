@@ -160,8 +160,8 @@ char get_char_rank(const unsigned index, BWTDecode *decode_info, unsigned *next_
             ++rank_index;
         }
         ++tempRunCount[out_char];
-    }reader_timer
-     += ((double)clock() - t)/CLOCKS_PER_SEC;
+    }
+    reader_timer += ((double)clock() - t)/CLOCKS_PER_SEC;
     *next_index = tempRunCount[out_char] + decode_info->CTable[out_char];
     return (char)out_char;
 }
