@@ -16,7 +16,7 @@
 #define BITS_PER_SYMBOL 2
 #define RANK_TABLE_SIZE (15728640/RANK_ENTRY_SIZE) // 4 chars per 8 bits (2 bits per char)
 #define INPUT_BUF_SIZE 4096
-#define OUTPUT_BUF_SIZE 99999
+#define OUTPUT_BUF_SIZE 150000
 
 #define FALSE 0
 #define TRUE 1
