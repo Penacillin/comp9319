@@ -67,7 +67,6 @@ typedef struct _BWTDecode {
     u_int32_t rankTableSize; // 4
 } BWTDecode;
 
-const size_t BWTDECODE_SIZE = sizeof(struct _BWTDecode);
 
 #define LANGUAGE_SIZE 5
 const unsigned LANGUAGE[LANGUAGE_SIZE] = {'\n', 'A', 'C', 'G', 'T'};
@@ -160,7 +159,6 @@ void build_tables(BWTDecode *decode_info) {
     decode_info->runCountCum[page_index].c_entry.val |= decode_info->runCount[LANGUAGE[3]];
     decode_info->runCountCum[page_index].d_entry.val |= decode_info->runCount[LANGUAGE[4]] << 8;
 
-    ++page_index;
     decode_info->rankTableSize = curr_index;
 }
 
@@ -210,8 +208,8 @@ char get_char_rank(const unsigned index, BWTDecode *decode_info, unsigned *next_
     // clock_t t = clock();
     // Fill out char counts for this page
     unsigned char_index = page_index * TABLE_SIZE - (direction == 1 ? 0 : 1);
-    int rank_entry_index = (char_index % RANK_ENTRY_SIZE); // - (direction == 1 ? 0 : 1);
-    unsigned rank_index = char_index / RANK_ENTRY_SIZE; // - (direction == 1 ? 0 : 1);
+    int rank_entry_index = (char_index % RANK_ENTRY_SIZE);
+    unsigned rank_index = char_index / RANK_ENTRY_SIZE;
     unsigned out_char;
     if (direction == 1 &&
          char_index <= decode_info->endingCharIndex && decode_info->endingCharIndex <= index)
@@ -377,7 +375,7 @@ int main(int argc, char** argv) {
         printf("Usage: %s <BWT file path> <Reversed file path>\n", argv[0]);
         exit(1);
     }
-    fprintf(stderr, "BWTDecode size %ld RunCountCumEntrySize: %ld\n", BWTDECODE_SIZE, RunCountCumEntrySize);
+    fprintf(stderr, "BWTDecode size %ld RunCountCumEntrySize: %ld\n", sizeof(struct _BWTDecode), RunCountCumEntrySize);
     off_t file_size = read_file(&bwtDecode, argv[1]);
 #ifdef DEBUG
     fprintf(stderr, "BWT file file_size: %ld\n", file_size);
