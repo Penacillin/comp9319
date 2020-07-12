@@ -1,5 +1,6 @@
 CXX=gcc
-CFLAGS=-Wextra -Wall -Werror --std=c11 -lrt
+CFLAGS=-Wextra -Wall -Werror --std=c11
+LDFLAGS=-lrt
 
 default: CFLAGS += -O3 -s
 default: executables
@@ -10,7 +11,7 @@ debug: executables
 executables: bwtdecode
 
 bwtdecode: bwtdecode.c
-	$(CXX) $(CFLAGS) -o $@ $<
+	$(CXX) $(CFLAGS) -o $@ $< $(LDFLAGS)
 
 remake: clean default
 

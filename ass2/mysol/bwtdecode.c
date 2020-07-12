@@ -58,7 +58,7 @@ const size_t RunCountCumEntrySize = sizeof(union RunCountCumEntry);
 
 typedef struct _BWTDecode {
     u_int32_t runCount[128]; // 512
-    union RunCountCumEntry runCountCum[PAGE_TABLE_SIZE]; // 7864336 // using 4*32=128 bits per snapshot. Actually needs 96 bits
+    union RunCountCumEntry runCountCum[PAGE_TABLE_SIZE]; // 5898240 // using 4*32=128 bits per snapshot. Actually needs 96 bits
     RankEntry rankTable[RANK_TABLE_SIZE]; // 3932160
     u_int32_t endingCharIndex; // 4
     u_int32_t CTable[128]; // 512
@@ -208,7 +208,7 @@ char get_char_rank(const unsigned index, BWTDecode *decode_info, unsigned *next_
     // clock_t t = clock();
     // Fill out char counts for this page
     unsigned char_index = page_index * TABLE_SIZE - (direction == 1 ? 0 : 1);
-    int rank_entry_index = (char_index % RANK_ENTRY_SIZE);
+    int rank_entry_index = (char_index & 0b11);
     unsigned rank_index = char_index / RANK_ENTRY_SIZE;
     unsigned out_char;
     if (direction == 1 &&
