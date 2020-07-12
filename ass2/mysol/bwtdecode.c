@@ -14,6 +14,7 @@
 #define TABLE_SIZE 32
 #define PAGE_TABLE_SIZE (15728640/TABLE_SIZE+1)
 #define RANK_ENTRY_SIZE 4
+#define RANK_ENTRY_MODULO_MASK 0b11
 #define BITS_PER_SYMBOL 2
 #define RANK_TABLE_SIZE (15728640/RANK_ENTRY_SIZE) // 4 chars per 8 bits (2 bits per char)
 #define INPUT_BUF_SIZE 4096
@@ -97,10 +98,10 @@ void build_tables(BWTDecode *decode_info) {
             for (unsigned j = 0; j < RANK_ENTRY_SIZE && i < k; ++j, ++i) {
                 // Snapshot runCount
                 if (curr_index % TABLE_SIZE == 0) {
+                    assert(page_index < PAGE_TABLE_SIZE);
                     for (unsigned l = 0; l < 4; ++l)
                         decode_info->runCountCum[page_index][l] = decode_info->runCount[LANGUAGE[l+1]];
                     ++page_index;
-                    assert(page_index < PAGE_TABLE_SIZE);
                 }
 
                 const char c = in_buffer[i];
@@ -123,6 +124,9 @@ void build_tables(BWTDecode *decode_info) {
             ++rank_index;
         }
     }
+    for (unsigned l = 0; l < 4; ++l)
+        decode_info->runCountCum[page_index][l] = decode_info->runCount[LANGUAGE[l+1]];
+    ++page_index;
     decode_info->rankTableSize = curr_index;
 }
 
@@ -143,7 +147,7 @@ void print_ranktable(const BWTDecode *decode_info) {
 }
 
 void print_cumtable(const BWTDecode *decode_info) {
-    for (unsigned i = 0; i < 2; ++i) {
+    for (unsigned i = 0; i < 3; ++i) {
         for (unsigned j = 0; j < 4; ++j) {
             fprintf(stderr, "%u,", decode_info->runCountCum[i][j]);
         }
@@ -169,8 +173,8 @@ char get_char_rank(const unsigned index, BWTDecode *decode_info, unsigned *next_
     // clock_t t = clock();
     // Fill out char counts for this page
     unsigned char_index = page_index * TABLE_SIZE - (direction == 1 ? 0 : 1);
-    unsigned rank_entry_index = char_index % RANK_ENTRY_SIZE - (direction == 1 ? 0 : 1);
-    unsigned rank_index = char_index / RANK_ENTRY_SIZE - (direction == 1 ? 0 : 1);
+    int rank_entry_index = (char_index % RANK_ENTRY_SIZE); // - (direction == 1 ? 0 : 1);
+    unsigned rank_index = char_index / RANK_ENTRY_SIZE; // - (direction == 1 ? 0 : 1);
     unsigned out_char;
     if (direction == 1 &&
          char_index <= decode_info->endingCharIndex && decode_info->endingCharIndex <= index)
@@ -180,26 +184,45 @@ char get_char_rank(const unsigned index, BWTDecode *decode_info, unsigned *next_
     }
 
 #ifdef DEBUG
-    fprintf(stderr, "Using page %d. rank_index %d\n", page_index, rank_index);
+    fprintf(stderr, "Using page %d. char_index %d, rank_index %d, rank_entry %d\n",
+             page_index, char_index, rank_index, rank_entry_index);
 #endif
-    while(char_index != index) {
+    if (direction == 1) {
+        do {
+            out_char =
+                LANGUAGE[((decode_info->rankTable[rank_index] >> (rank_entry_index*BITS_PER_SYMBOL)) & 0b11) + 1];
+            ++rank_entry_index;
+            if (rank_entry_index == RANK_ENTRY_SIZE) {
+                rank_entry_index = 0;
+                ++rank_index;
+            }
+            ++tempRunCount[out_char];
+            ++char_index;
+        } while(char_index <= index);
+        --tempRunCount[out_char];
+    } else {
         out_char =
             LANGUAGE[((decode_info->rankTable[rank_index] >> (rank_entry_index*BITS_PER_SYMBOL)) & 0b11) + 1];
-        rank_entry_index += direction;
-        if (rank_entry_index == (direction == 1 ? RANK_ENTRY_SIZE : 0)) {
-            rank_entry_index = direction == 1 ? 0 : RANK_ENTRY_SIZE;
-            rank_index += direction;
-        }
-        tempRunCount[out_char] += direction;
-        char_index += direction;
-    };
-    out_char =
-        LANGUAGE[((decode_info->rankTable[rank_index] >> (rank_entry_index*BITS_PER_SYMBOL)) & 0b11) + 1];
-    tempRunCount[out_char] += direction;
-    // reader_timer += ((double)clock() - t)/CLOCKS_PER_SEC;
-    *next_index = tempRunCount[out_char]-1 + decode_info->CTable[out_char];
+        --tempRunCount[out_char];
+        while(char_index > index) {
+            --rank_entry_index;
+            if (rank_entry_index == -1) {
+                rank_entry_index = RANK_ENTRY_SIZE - 1;
+                --rank_index;
+            }
+            out_char =
+                LANGUAGE[((decode_info->rankTable[rank_index] >> (rank_entry_index*BITS_PER_SYMBOL)) & 0b11) + 1];
+            --tempRunCount[out_char];
+            --char_index;
 #ifdef DEBUG
-    printf("%c %d %d\n", out_char, tempRunCount[out_char]-1, decode_info->CTable[out_char]);
+            fprintf(stderr, "< %d %c %d\n", char_index, out_char, tempRunCount[out_char]);
+#endif
+        };
+    }
+    // reader_timer += ((double)clock() - t)/CLOCKS_PER_SEC;
+    *next_index = tempRunCount[out_char] + decode_info->CTable[out_char];
+#ifdef DEBUG
+    printf("%c %d %d\n", out_char, tempRunCount[out_char], decode_info->CTable[out_char]);
 #endif
     return (char)out_char;
 }
