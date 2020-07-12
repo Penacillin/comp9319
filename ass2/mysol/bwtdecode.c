@@ -18,7 +18,7 @@
 #define BITS_PER_SYMBOL 2
 #define RANK_TABLE_SIZE (15728640/RANK_ENTRY_SIZE) // 4 chars per 8 bits (2 bits per char)
 #define INPUT_BUF_SIZE 4096
-#define OUTPUT_BUF_SIZE 150000
+#define OUTPUT_BUF_SIZE 160000
 
 #define FALSE 0
 #define TRUE 1
@@ -26,10 +26,39 @@
 // Use 2 bits per symbol. 4 symbols per char/RankEntry
 typedef char RankEntry;
 
+// 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000
+// AAAAAAAA AAAAAAAA AAAAAAAA BBBBBBBB BBBBBBBB BBBBBBBB CCCCCCCC CCCCCCCC CCCCCCCC DDDDDDDD DDDDDDDD DDDDDDDD  
+
+#define RUN_COUNT_UPPER_MASK 0xFFFFFF00
+#define RUN_COUNT_LOWER_MASK 0x00FFFFFF
+
+union RunCountCumEntry {
+    struct __attribute__((__packed__)) _A_entry {
+        u_int32_t val;
+        unsigned char x[8];
+    } a_entry;
+    struct __attribute__((__packed__)) _B_entry {
+        unsigned char _x[3];
+        u_int32_t val;
+        unsigned char _y[5];
+    } b_entry;
+    struct __attribute__((__packed__)) _C_entry {
+        unsigned char _x[6];
+        u_int32_t val;
+        unsigned char _y[2];
+    } c_entry;
+    struct __attribute__((__packed__)) _D_entry {
+        unsigned char _x[8];
+        u_int32_t val;
+    } d_entry;
+};
+
+
+const size_t RunCountCumEntrySize = sizeof(union RunCountCumEntry);
 
 typedef struct _BWTDecode {
     u_int32_t runCount[128]; // 512
-    u_int32_t runCountCum[PAGE_TABLE_SIZE][4]; // 7864336 // using 4*32=128 bits per snapshot. Actually needs 96 bits
+    union RunCountCumEntry runCountCum[PAGE_TABLE_SIZE]; // 7864336 // using 4*32=128 bits per snapshot. Actually needs 96 bits
     RankEntry rankTable[RANK_TABLE_SIZE]; // 3932160
     u_int32_t endingCharIndex; // 4
     u_int32_t CTable[128]; // 512
@@ -99,8 +128,10 @@ void build_tables(BWTDecode *decode_info) {
                 // Snapshot runCount
                 if (curr_index % TABLE_SIZE == 0) {
                     assert(page_index < PAGE_TABLE_SIZE);
-                    for (unsigned l = 0; l < 4; ++l)
-                        decode_info->runCountCum[page_index][l] = decode_info->runCount[LANGUAGE[l+1]];
+                    decode_info->runCountCum[page_index].a_entry.val = decode_info->runCount[LANGUAGE[1]];
+                    decode_info->runCountCum[page_index].b_entry.val |= decode_info->runCount[LANGUAGE[2]];
+                    decode_info->runCountCum[page_index].c_entry.val |= decode_info->runCount[LANGUAGE[3]];
+                    decode_info->runCountCum[page_index].d_entry.val |= decode_info->runCount[LANGUAGE[4]] << 8;
                     ++page_index;
                 }
 
@@ -124,8 +155,11 @@ void build_tables(BWTDecode *decode_info) {
             ++rank_index;
         }
     }
-    for (unsigned l = 0; l < 4; ++l)
-        decode_info->runCountCum[page_index][l] = decode_info->runCount[LANGUAGE[l+1]];
+    decode_info->runCountCum[page_index].a_entry.val = decode_info->runCount[LANGUAGE[1]];
+    decode_info->runCountCum[page_index].b_entry.val |= decode_info->runCount[LANGUAGE[2]];
+    decode_info->runCountCum[page_index].c_entry.val |= decode_info->runCount[LANGUAGE[3]];
+    decode_info->runCountCum[page_index].d_entry.val |= decode_info->runCount[LANGUAGE[4]] << 8;
+
     ++page_index;
     decode_info->rankTableSize = curr_index;
 }
@@ -148,9 +182,10 @@ void print_ranktable(const BWTDecode *decode_info) {
 
 void print_cumtable(const BWTDecode *decode_info) {
     for (unsigned i = 0; i < 3; ++i) {
-        for (unsigned j = 0; j < 4; ++j) {
-            fprintf(stderr, "%u,", decode_info->runCountCum[i][j]);
-        }
+        fprintf(stderr, "%u,", decode_info->runCountCum[i].a_entry.val & RUN_COUNT_LOWER_MASK);
+        fprintf(stderr, "%u,", decode_info->runCountCum[i].b_entry.val & RUN_COUNT_LOWER_MASK);
+        fprintf(stderr, "%u,", decode_info->runCountCum[i].c_entry.val & RUN_COUNT_LOWER_MASK);
+        fprintf(stderr, "%u,", decode_info->runCountCum[i].d_entry.val >> 8);
         fprintf(stderr, "\n");
     }
 }
@@ -168,8 +203,10 @@ char get_char_rank(const unsigned index, BWTDecode *decode_info, unsigned *next_
     unsigned tempRunCount[128];
     tempRunCount['\n'] = 0;
     // Load in char counts until this page
-    for (unsigned i = 0; i < 4; ++i)
-        tempRunCount[LANGUAGE[i+1]] = decode_info->runCountCum[page_index][i];
+    tempRunCount[LANGUAGE[1]] = decode_info->runCountCum[page_index].a_entry.val & RUN_COUNT_LOWER_MASK;
+    tempRunCount[LANGUAGE[2]] = decode_info->runCountCum[page_index].b_entry.val & RUN_COUNT_LOWER_MASK;
+    tempRunCount[LANGUAGE[3]] = decode_info->runCountCum[page_index].c_entry.val & RUN_COUNT_LOWER_MASK;
+    tempRunCount[LANGUAGE[4]] = decode_info->runCountCum[page_index].d_entry.val >> 8;
     // clock_t t = clock();
     // Fill out char counts for this page
     unsigned char_index = page_index * TABLE_SIZE - (direction == 1 ? 0 : 1);
@@ -188,17 +225,20 @@ char get_char_rank(const unsigned index, BWTDecode *decode_info, unsigned *next_
              page_index, char_index, rank_index, rank_entry_index);
 #endif
     if (direction == 1) {
-        do {
-            out_char =
-                LANGUAGE[((decode_info->rankTable[rank_index] >> (rank_entry_index*BITS_PER_SYMBOL)) & 0b11) + 1];
+        out_char =
+            LANGUAGE[((decode_info->rankTable[rank_index] >> (rank_entry_index*BITS_PER_SYMBOL)) & 0b11) + 1];
+        ++tempRunCount[out_char];
+        while(char_index < index) {
             ++rank_entry_index;
             if (rank_entry_index == RANK_ENTRY_SIZE) {
                 rank_entry_index = 0;
                 ++rank_index;
             }
+            out_char =
+                LANGUAGE[((decode_info->rankTable[rank_index] >> (rank_entry_index*BITS_PER_SYMBOL)) & 0b11) + 1];
             ++tempRunCount[out_char];
             ++char_index;
-        } while(char_index <= index);
+        };
         --tempRunCount[out_char];
     } else {
         out_char =
@@ -337,7 +377,7 @@ int main(int argc, char** argv) {
         printf("Usage: %s <BWT file path> <Reversed file path>\n", argv[0]);
         exit(1);
     }
-    fprintf(stderr, "BWTDecode size %ld\n", BWTDECODE_SIZE);
+    fprintf(stderr, "BWTDecode size %ld RunCountCumEntrySize: %ld\n", BWTDECODE_SIZE, RunCountCumEntrySize);
     off_t file_size = read_file(&bwtDecode, argv[1]);
 #ifdef DEBUG
     fprintf(stderr, "BWT file file_size: %ld\n", file_size);
