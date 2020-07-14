@@ -18,7 +18,7 @@
 #define BITS_PER_SYMBOL 2
 #define RANK_TABLE_SIZE (15728640/RANK_ENTRY_SIZE) // 4 chars per 8 bits (2 bits per char)
 #define INPUT_BUF_SIZE 8192
-#define OUTPUT_BUF_SIZE 200000
+#define OUTPUT_BUF_SIZE 210000
 
 #define FALSE 0
 #define TRUE 1
@@ -62,7 +62,6 @@ typedef struct __attribute__((__packed__))  _RankEntry {
 const size_t RunCountCumEntrySize = sizeof(RankEntry);
 
 typedef struct _BWTDecode {
-    u_int32_t runCount[128]; // 512
     RankEntry rankTable[PAGE_TABLE_SIZE]; // 9830400
     u_int32_t endingCharIndex; // 4
     u_int32_t CTable[128]; // 512
@@ -76,6 +75,7 @@ typedef struct _BWTDecode {
 const unsigned LANGUAGE[LANGUAGE_SIZE] = {'\n', 'A', 'C', 'G', 'T'};
 
 static inline unsigned get_char_index(const char c) {
+#ifdef DEBUG
     switch(c)  {
         case 'A': return 1;
         case 'C': return 2;
@@ -83,14 +83,20 @@ static inline unsigned get_char_index(const char c) {
         case 'T': return 4;
         case '\n': return 0;
     };
-
-#ifdef DEBUG
     fprintf(stderr, "FATAL UNKOWN CHARACTER %d\n", c);
     exit(1);
 #else
-    return 0;
+    switch(c)  {
+        // case 'A': return 1;
+        case 'C': return 2;
+        case 'G': return 3;
+        case 'T': return 4;
+        case '\n': return 0;
+        default: return 1;
+    };
 #endif
 }
+
 static inline unsigned get_rank_entry_char_index(const char c) {
 #ifdef DEBUG
     switch(c)  {
@@ -102,13 +108,14 @@ static inline unsigned get_rank_entry_char_index(const char c) {
     };
     fprintf(stderr, "FATAL UNKOWN CHARACTER %d\n", c);
     exit(1);
-#endif
+#else
     switch(c)  {
         case 'A': return 0;
         case 'C': return 1;
         case 'G': return 2;
         default: return 3;
     };
+#endif
 }
 
 // A      C      G     T
@@ -143,6 +150,7 @@ void build_tables(BWTDecode *decode_info) {
     unsigned curr_index = 0;
     unsigned rank_index = 0;
     unsigned page_index = 0;
+    unsigned tempRunCount[128] = {0};
     char in_buffer[INPUT_BUF_SIZE];
     // char in_buffer2[INPUT_BUF_SIZE];
     // struct aiocb aiocbp;
@@ -161,10 +169,10 @@ void build_tables(BWTDecode *decode_info) {
                 // Snapshot runCount
                 if (__glibc_unlikely(curr_index % TABLE_SIZE == 0)) {
                     // assert(page_index < PAGE_TABLE_SIZE);
-                    decode_info->rankTable[page_index].snapshot.a_entry.val = decode_info->runCount[LANGUAGE[1]];
-                    decode_info->rankTable[page_index].snapshot.b_entry.val |= decode_info->runCount[LANGUAGE[2]];
-                    decode_info->rankTable[page_index].snapshot.c_entry.val |= decode_info->runCount[LANGUAGE[3]];
-                    decode_info->rankTable[page_index].snapshot.d_entry.val |= decode_info->runCount[LANGUAGE[4]] << 8;
+                    decode_info->rankTable[page_index].snapshot.a_entry.val = tempRunCount[LANGUAGE[1]];
+                    decode_info->rankTable[page_index].snapshot.b_entry.val |= tempRunCount[LANGUAGE[2]];
+                    decode_info->rankTable[page_index].snapshot.c_entry.val |= tempRunCount[LANGUAGE[3]];
+                    decode_info->rankTable[page_index].snapshot.d_entry.val |= tempRunCount[LANGUAGE[4]] << 8;
                     ++page_index;
                     rank_index = 0;
                 }
@@ -172,27 +180,30 @@ void build_tables(BWTDecode *decode_info) {
                 const char c = in_buffer[i];
                 if (__glibc_unlikely(c == '\n')) decode_info->endingCharIndex = curr_index;
                 // Add to all CTable above char
-                for (unsigned k = get_char_index(c) + 1; k < LANGUAGE_SIZE; ++k) {
+                const unsigned char_val = get_char_index(c);
+                for (unsigned k = char_val + 1; k < LANGUAGE_SIZE; ++k) {
                     ++(decode_info->CTable[LANGUAGE[k]]);
                 }
                 // 00000001 00000010 00000011 00000010
                 // 00000000 00000000 00000000 01101110
                 // Put symbol into rank array
+                // decode_info->rankTable[page_index-1].symbol_array[rank_index] |=
+                //     ((char_val - 1) & 0b11) << (j*BITS_PER_SYMBOL);
                 decode_info->rankTable[page_index-1].symbol_array[rank_index] |=
-                    get_rank_entry_char_index(c) << (j*BITS_PER_SYMBOL);
+                    ((char_val - 1) & 0b11) << (j*BITS_PER_SYMBOL);
 
                 // Run count for rank table
-                ++decode_info->runCount[(unsigned)c];
+                ++tempRunCount[(unsigned)c];
 
                 ++curr_index;
             }
             ++rank_index;
         }
     }
-    decode_info->rankTable[page_index].snapshot.a_entry.val = decode_info->runCount[LANGUAGE[1]];
-    decode_info->rankTable[page_index].snapshot.b_entry.val |= decode_info->runCount[LANGUAGE[2]];
-    decode_info->rankTable[page_index].snapshot.c_entry.val |= decode_info->runCount[LANGUAGE[3]];
-    decode_info->rankTable[page_index].snapshot.d_entry.val |= decode_info->runCount[LANGUAGE[4]] << 8;
+    decode_info->rankTable[page_index].snapshot.a_entry.val = tempRunCount[LANGUAGE[1]];
+    decode_info->rankTable[page_index].snapshot.b_entry.val |= tempRunCount[LANGUAGE[2]];
+    decode_info->rankTable[page_index].snapshot.c_entry.val |= tempRunCount[LANGUAGE[3]];
+    decode_info->rankTable[page_index].snapshot.d_entry.val |= tempRunCount[LANGUAGE[4]] << 8;
 
     decode_info->rankTableSize = curr_index;
 }
@@ -261,7 +272,7 @@ char get_char_rank(const unsigned index, BWTDecode *decode_info, unsigned *next_
         ++tempRunCount[out_char];
         while(__glibc_likely(char_index < index)) {
             ++rank_entry_index;
-            if (__glibc_unlikely(rank_entry_index == RANK_ENTRY_SIZE)) {
+            if (rank_entry_index == RANK_ENTRY_SIZE) {
                 rank_entry_index = 0;
                 ++rank_index;
             }
@@ -277,7 +288,7 @@ char get_char_rank(const unsigned index, BWTDecode *decode_info, unsigned *next_
         --tempRunCount[out_char];
         while(__glibc_likely(char_index > index)) {
             --rank_entry_index;
-            if (__glibc_unlikely(rank_entry_index == -1)) {
+            if (rank_entry_index == -1) {
                 rank_entry_index = RANK_ENTRY_SIZE - 1;
                 --rank_index;
             }
@@ -413,7 +424,7 @@ int do_stuff2(BWTDecode *decode_info,
     return 0;
 }
 
-BWTDecode bwtDecode = {.runCount = {0}, .CTable = {0}};
+BWTDecode bwtDecode = {.CTable = {0}};
 
 int main(int argc, char** argv) {
     if (argc != 3) {
