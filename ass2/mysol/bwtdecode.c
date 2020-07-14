@@ -92,18 +92,25 @@ static inline unsigned get_char_index(const char c) {
 #endif
 }
 static inline unsigned get_rank_entry_char_index(const char c) {
+#ifdef DEBUG
+    switch(c)  {
+        case 'A': return 1;
+        case 'C': return 2;
+        case 'G': return 3;
+        case 'T': return 4;
+        case '\n': return 0;
+    };
+    fprintf(stderr, "FATAL UNKOWN CHARACTER %d\n", c);
+    exit(1);
+#endif
     switch(c)  {
         case 'A': return 0;
         case 'C': return 1;
         case 'G': return 2;
         default: return 3;
     };
-
-#ifdef DEBUG
-    fprintf(stderr, "FATAL UNKOWN CHARACTER %d\n", c);
-    exit(1);
-#endif
 }
+
 // A      C      G     T
 // 0      2      6     9
 // 0000   0010   0110  1001 
@@ -142,8 +149,8 @@ void build_tables(BWTDecode *decode_info) {
             decode_info->rankTable[page_index].symbol_array[rank_index] = 0;
             for (unsigned j = 0; j < RANK_ENTRY_SIZE && i < k; ++j, ++i) {
                 // Snapshot runCount
-                if (curr_index % TABLE_SIZE == 0) {
-                    assert(page_index < PAGE_TABLE_SIZE);
+                if (__glibc_unlikely(curr_index % TABLE_SIZE == 0)) {
+                    // assert(page_index < PAGE_TABLE_SIZE);
                     decode_info->rankTable[page_index].snapshot.a_entry.val = decode_info->runCount[LANGUAGE[1]];
                     decode_info->rankTable[page_index].snapshot.b_entry.val |= decode_info->runCount[LANGUAGE[2]];
                     decode_info->rankTable[page_index].snapshot.c_entry.val |= decode_info->runCount[LANGUAGE[3]];
@@ -153,7 +160,7 @@ void build_tables(BWTDecode *decode_info) {
                 }
 
                 const char c = in_buffer[i];
-                if (c == '\n') decode_info->endingCharIndex = curr_index;
+                if (__glibc_unlikely(c == '\n')) decode_info->endingCharIndex = curr_index;
                 // Add to all CTable above char
                 for (unsigned k = get_char_index(c) + 1; k < LANGUAGE_SIZE; ++k) {
                     ++(decode_info->CTable[LANGUAGE[k]]);
@@ -213,10 +220,7 @@ u_int64_t busy_waits = 0;
 char get_char_rank(const unsigned index, BWTDecode *decode_info, unsigned *next_index) {
     const unsigned snapshot_page_index = index / TABLE_SIZE + ((index % TABLE_SIZE > TABLE_SIZE / 2) ? 1 : 0);
     const unsigned page_index = index / TABLE_SIZE;
-    int direction = 1;
-    if (index % TABLE_SIZE > TABLE_SIZE / 2) {
-        direction = -1;
-    }
+    const int direction =  (index % TABLE_SIZE > TABLE_SIZE / 2) ? -1 : 1;
     unsigned tempRunCount[128];
     tempRunCount['\n'] = 0;
     // Load in char counts until this page
