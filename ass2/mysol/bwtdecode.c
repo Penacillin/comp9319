@@ -14,11 +14,11 @@
 #define TABLE_SIZE 32
 #define PAGE_TABLE_SIZE (15728640/TABLE_SIZE+1)
 #define RANK_ENTRY_SIZE 4
-#define RANK_ENTRY_MODULO_MASK 0b11
+#define RANK_ENTRY_MASK 0b11
 #define BITS_PER_SYMBOL 2
 #define RANK_TABLE_SIZE (15728640/RANK_ENTRY_SIZE) // 4 chars per 8 bits (2 bits per char)
 #define INPUT_BUF_SIZE 4096
-#define OUTPUT_BUF_SIZE 160000
+#define OUTPUT_BUF_SIZE 190000
 
 #define FALSE 0
 #define TRUE 1
@@ -59,7 +59,7 @@ typedef struct __attribute__((__packed__))  _RankEntry {
 } RankEntry;
 
 
-const size_t RunCountCumEntrySize = sizeof(union RunCountCumEntry);
+const size_t RunCountCumEntrySize = sizeof(RankEntry);
 
 typedef struct _BWTDecode {
     u_int32_t runCount[128]; // 512
@@ -91,13 +91,26 @@ static inline unsigned get_char_index(const char c) {
     return 0;
 #endif
 }
+static inline unsigned get_rank_entry_char_index(const char c) {
+    switch(c)  {
+        case 'A': return 0;
+        case 'C': return 1;
+        case 'G': return 2;
+        default: return 3;
+    };
+
+#ifdef DEBUG
+    fprintf(stderr, "FATAL UNKOWN CHARACTER %d\n", c);
+    exit(1);
+#endif
+}
 // A      C      G     T
 // 0      2      6     9
 // 0000   0010   0110  1001 
 // 0 1 2 3
 // 0000   0001   0010  0011
 
-off_t read_file(BWTDecode* decode_info, char *bwt_file_path) {
+off_t open_input_file(BWTDecode* decode_info, char *bwt_file_path) {
     int fd = open(bwt_file_path, O_RDONLY);
     if (fd < 0) {
         printf("Could not open BWT file %s\n", bwt_file_path);
@@ -148,8 +161,8 @@ void build_tables(BWTDecode *decode_info) {
                 // 00000001 00000010 00000011 00000010
                 // 00000000 00000000 00000000 01101110
                 // Put symbol into rank array
-                decode_info->rankTable[page_index-1].symbol_array[rank_index] |= 
-                    ((get_char_index(c)-1) & 0b11) << (j*BITS_PER_SYMBOL);
+                decode_info->rankTable[page_index-1].symbol_array[rank_index] |=
+                    get_rank_entry_char_index(c) << (j*BITS_PER_SYMBOL);
 
                 // Run count for rank table
                 ++decode_info->runCount[(unsigned)c];
@@ -271,11 +284,7 @@ char get_char_rank(const unsigned index, BWTDecode *decode_info, unsigned *next_
     return (char)out_char;
 }
 
-// The main BWTDecode running algorithm
-int do_stuff2(BWTDecode *decode_info,
-              off_t file_size,
-              char* output_file_path,
-              unsigned int a2) {
+int setup_BWT(BWTDecode *decode_info, char* output_file_path) {
     int out_fd = open(output_file_path, O_CREAT | O_WRONLY, 0666);
     if (out_fd < 0) {
         char *err = strerror(errno);
@@ -283,12 +292,18 @@ int do_stuff2(BWTDecode *decode_info,
         exit(1);
     }
 
-    (void)a2;
-
     clock_t t = clock();
     build_tables(decode_info);
     t = clock() - t;
     printf("build_tables() took %f seconds to execute \n", ((double)t)/CLOCKS_PER_SEC);
+
+    return out_fd;
+}
+
+// The main BWTDecode running algorithm
+int do_stuff2(BWTDecode *decode_info,
+              off_t file_size,
+              int out_fd) {
 
 #ifdef DEBUG
     print_ctable(decode_info);
@@ -328,7 +343,7 @@ int do_stuff2(BWTDecode *decode_info,
 
         if (output_buffer_index == 0) {
             while((res = aio_error(&aiocbp)) == EINPROGRESS && first_write) ++busy_waits;
-            if (res != 0 && first_write) {
+            if (res != 0) {
 #ifdef DEBUG
                 fprintf(stderr, "index=%d,res=%d,error=%s\n", index, res, strerror(res));
 #endif
@@ -392,13 +407,12 @@ int main(int argc, char** argv) {
         exit(1);
     }
     fprintf(stderr, "BWTDecode size %ld RunCountCumEntrySize: %ld\n", sizeof(struct _BWTDecode), RunCountCumEntrySize);
-    off_t file_size = read_file(&bwtDecode, argv[1]);
+    off_t file_size = open_input_file(&bwtDecode, argv[1]);
 #ifdef DEBUG
     fprintf(stderr, "BWT file file_size: %ld\n", file_size);
 #endif
-    (void)file_size;
-
-    do_stuff2(&bwtDecode, file_size, argv[2], 0);
+    const int out_fd = setup_BWT(&bwtDecode, argv[2]);
+    do_stuff2(&bwtDecode, file_size, out_fd);
 
     close(bwtDecode.bwt_file_fd);
 
