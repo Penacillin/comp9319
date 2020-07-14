@@ -23,8 +23,6 @@
 #define FALSE 0
 #define TRUE 1
 
-// Use 2 bits per symbol. 4 symbols per char/RankEntry
-typedef char RankEntry;
 
 // 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000
 // AAAAAAAA AAAAAAAA AAAAAAAA BBBBBBBB BBBBBBBB BBBBBBBB CCCCCCCC CCCCCCCC CCCCCCCC DDDDDDDD DDDDDDDD DDDDDDDD  
@@ -53,13 +51,19 @@ union RunCountCumEntry {
     } d_entry;
 };
 
+// Use pages of 32 symbols (8 chars (4 symbols per char))
+// With a snapshot of all pages leading to this page
+typedef struct __attribute__((__packed__))  _RankEntry {
+    union RunCountCumEntry snapshot;
+    char symbol_array[TABLE_SIZE/RANK_ENTRY_SIZE];
+} RankEntry;
+
 
 const size_t RunCountCumEntrySize = sizeof(union RunCountCumEntry);
 
 typedef struct _BWTDecode {
     u_int32_t runCount[128]; // 512
-    union RunCountCumEntry runCountCum[PAGE_TABLE_SIZE]; // 5898240 // using 4*32=128 bits per snapshot. Actually needs 96 bits
-    RankEntry rankTable[RANK_TABLE_SIZE]; // 3932160
+    RankEntry rankTable[PAGE_TABLE_SIZE]; // 9830400
     u_int32_t endingCharIndex; // 4
     u_int32_t CTable[128]; // 512
     int bwt_file_fd; // 4
@@ -122,16 +126,17 @@ void build_tables(BWTDecode *decode_info) {
     while((k = read(decode_info->bwt_file_fd, in_buffer, INPUT_BUF_SIZE)) > 0) {
         for (ssize_t i = 0; i < k;) {
             // Clear out page ready to input symbols
-            decode_info->rankTable[rank_index] = 0;
+            decode_info->rankTable[page_index].symbol_array[rank_index] = 0;
             for (unsigned j = 0; j < RANK_ENTRY_SIZE && i < k; ++j, ++i) {
                 // Snapshot runCount
                 if (curr_index % TABLE_SIZE == 0) {
                     assert(page_index < PAGE_TABLE_SIZE);
-                    decode_info->runCountCum[page_index].a_entry.val = decode_info->runCount[LANGUAGE[1]];
-                    decode_info->runCountCum[page_index].b_entry.val |= decode_info->runCount[LANGUAGE[2]];
-                    decode_info->runCountCum[page_index].c_entry.val |= decode_info->runCount[LANGUAGE[3]];
-                    decode_info->runCountCum[page_index].d_entry.val |= decode_info->runCount[LANGUAGE[4]] << 8;
+                    decode_info->rankTable[page_index].snapshot.a_entry.val = decode_info->runCount[LANGUAGE[1]];
+                    decode_info->rankTable[page_index].snapshot.b_entry.val |= decode_info->runCount[LANGUAGE[2]];
+                    decode_info->rankTable[page_index].snapshot.c_entry.val |= decode_info->runCount[LANGUAGE[3]];
+                    decode_info->rankTable[page_index].snapshot.d_entry.val |= decode_info->runCount[LANGUAGE[4]] << 8;
                     ++page_index;
+                    rank_index = 0;
                 }
 
                 const char c = in_buffer[i];
@@ -143,7 +148,7 @@ void build_tables(BWTDecode *decode_info) {
                 // 00000001 00000010 00000011 00000010
                 // 00000000 00000000 00000000 01101110
                 // Put symbol into rank array
-                decode_info->rankTable[rank_index] |= 
+                decode_info->rankTable[page_index-1].symbol_array[rank_index] |= 
                     ((get_char_index(c)-1) & 0b11) << (j*BITS_PER_SYMBOL);
 
                 // Run count for rank table
@@ -154,10 +159,10 @@ void build_tables(BWTDecode *decode_info) {
             ++rank_index;
         }
     }
-    decode_info->runCountCum[page_index].a_entry.val = decode_info->runCount[LANGUAGE[1]];
-    decode_info->runCountCum[page_index].b_entry.val |= decode_info->runCount[LANGUAGE[2]];
-    decode_info->runCountCum[page_index].c_entry.val |= decode_info->runCount[LANGUAGE[3]];
-    decode_info->runCountCum[page_index].d_entry.val |= decode_info->runCount[LANGUAGE[4]] << 8;
+    decode_info->rankTable[page_index].snapshot.a_entry.val = decode_info->runCount[LANGUAGE[1]];
+    decode_info->rankTable[page_index].snapshot.b_entry.val |= decode_info->runCount[LANGUAGE[2]];
+    decode_info->rankTable[page_index].snapshot.c_entry.val |= decode_info->runCount[LANGUAGE[3]];
+    decode_info->rankTable[page_index].snapshot.d_entry.val |= decode_info->runCount[LANGUAGE[4]] << 8;
 
     decode_info->rankTableSize = curr_index;
 }
@@ -170,20 +175,21 @@ void print_ctable(const BWTDecode *decode_info) {
 
 void print_ranktable(const BWTDecode *decode_info) {
     for (unsigned i = 0; i < decode_info->rankTableSize; ++i) {
-        const unsigned rank_index = i / RANK_ENTRY_SIZE;
         const unsigned rank_entry_index = i % RANK_ENTRY_SIZE;
-        fprintf(stderr, "%d >%c<\n",
-            i, LANGUAGE[((decode_info->rankTable[rank_index] >> (rank_entry_index*BITS_PER_SYMBOL)) & 0b11)+1]);
+        const unsigned page_index = i / TABLE_SIZE;
+        const unsigned rank_index = (i - page_index * TABLE_SIZE) / RANK_ENTRY_SIZE;
+        fprintf(stderr, "%d(page=%d,rank=%d,entry=%d) >%c<\n", i, page_index, rank_index, rank_entry_index,
+            LANGUAGE[((decode_info->rankTable[page_index].symbol_array[rank_index] >> (rank_entry_index*BITS_PER_SYMBOL)) & 0b11)+1]);
     }
     printf("%d is endchar\n", decode_info->endingCharIndex);
 }
 
 void print_cumtable(const BWTDecode *decode_info) {
     for (unsigned i = 0; i < 3; ++i) {
-        fprintf(stderr, "%u,", decode_info->runCountCum[i].a_entry.val & RUN_COUNT_LOWER_MASK);
-        fprintf(stderr, "%u,", decode_info->runCountCum[i].b_entry.val & RUN_COUNT_LOWER_MASK);
-        fprintf(stderr, "%u,", decode_info->runCountCum[i].c_entry.val & RUN_COUNT_LOWER_MASK);
-        fprintf(stderr, "%u,", decode_info->runCountCum[i].d_entry.val >> 8);
+        fprintf(stderr, "%u,", decode_info->rankTable[i].snapshot.a_entry.val & RUN_COUNT_LOWER_MASK);
+        fprintf(stderr, "%u,", decode_info->rankTable[i].snapshot.b_entry.val & RUN_COUNT_LOWER_MASK);
+        fprintf(stderr, "%u,", decode_info->rankTable[i].snapshot.c_entry.val & RUN_COUNT_LOWER_MASK);
+        fprintf(stderr, "%u,", decode_info->rankTable[i].snapshot.d_entry.val >> 8);
         fprintf(stderr, "\n");
     }
 }
@@ -192,24 +198,24 @@ double reader_timer = 0;
 u_int64_t busy_waits = 0;
 
 char get_char_rank(const unsigned index, BWTDecode *decode_info, unsigned *next_index) {
-    unsigned page_index = index / TABLE_SIZE;
+    const unsigned snapshot_page_index = index / TABLE_SIZE + ((index % TABLE_SIZE > TABLE_SIZE / 2) ? 1 : 0);
+    const unsigned page_index = index / TABLE_SIZE;
     int direction = 1;
     if (index % TABLE_SIZE > TABLE_SIZE / 2) {
         direction = -1;
-        ++page_index;
     }
     unsigned tempRunCount[128];
     tempRunCount['\n'] = 0;
     // Load in char counts until this page
-    tempRunCount[LANGUAGE[1]] = decode_info->runCountCum[page_index].a_entry.val & RUN_COUNT_LOWER_MASK;
-    tempRunCount[LANGUAGE[2]] = decode_info->runCountCum[page_index].b_entry.val & RUN_COUNT_LOWER_MASK;
-    tempRunCount[LANGUAGE[3]] = decode_info->runCountCum[page_index].c_entry.val & RUN_COUNT_LOWER_MASK;
-    tempRunCount[LANGUAGE[4]] = decode_info->runCountCum[page_index].d_entry.val >> 8;
+    tempRunCount[LANGUAGE[1]] = decode_info->rankTable[snapshot_page_index].snapshot.a_entry.val & RUN_COUNT_LOWER_MASK;
+    tempRunCount[LANGUAGE[2]] = decode_info->rankTable[snapshot_page_index].snapshot.b_entry.val & RUN_COUNT_LOWER_MASK;
+    tempRunCount[LANGUAGE[3]] = decode_info->rankTable[snapshot_page_index].snapshot.c_entry.val & RUN_COUNT_LOWER_MASK;
+    tempRunCount[LANGUAGE[4]] = decode_info->rankTable[snapshot_page_index].snapshot.d_entry.val >> 8;
     // clock_t t = clock();
     // Fill out char counts for this page
-    unsigned char_index = page_index * TABLE_SIZE - (direction == 1 ? 0 : 1);
+    unsigned char_index = snapshot_page_index * TABLE_SIZE - (direction == 1 ? 0 : 1);
     int rank_entry_index = (char_index & 0b11);
-    unsigned rank_index = char_index / RANK_ENTRY_SIZE;
+    unsigned rank_index = (char_index - page_index * TABLE_SIZE) / RANK_ENTRY_SIZE;
     unsigned out_char;
     if (direction == 1 &&
          char_index <= decode_info->endingCharIndex && decode_info->endingCharIndex <= index)
@@ -224,7 +230,7 @@ char get_char_rank(const unsigned index, BWTDecode *decode_info, unsigned *next_
 #endif
     if (direction == 1) {
         out_char =
-            LANGUAGE[((decode_info->rankTable[rank_index] >> (rank_entry_index*BITS_PER_SYMBOL)) & 0b11) + 1];
+            LANGUAGE[((decode_info->rankTable[page_index].symbol_array[rank_index] >> (rank_entry_index*BITS_PER_SYMBOL)) & 0b11) + 1];
         ++tempRunCount[out_char];
         while(char_index < index) {
             ++rank_entry_index;
@@ -233,14 +239,14 @@ char get_char_rank(const unsigned index, BWTDecode *decode_info, unsigned *next_
                 ++rank_index;
             }
             out_char =
-                LANGUAGE[((decode_info->rankTable[rank_index] >> (rank_entry_index*BITS_PER_SYMBOL)) & 0b11) + 1];
+                LANGUAGE[((decode_info->rankTable[page_index].symbol_array[rank_index] >> (rank_entry_index*BITS_PER_SYMBOL)) & 0b11) + 1];
             ++tempRunCount[out_char];
             ++char_index;
         };
         --tempRunCount[out_char];
     } else {
         out_char =
-            LANGUAGE[((decode_info->rankTable[rank_index] >> (rank_entry_index*BITS_PER_SYMBOL)) & 0b11) + 1];
+            LANGUAGE[((decode_info->rankTable[page_index].symbol_array[rank_index] >> (rank_entry_index*BITS_PER_SYMBOL)) & 0b11) + 1];
         --tempRunCount[out_char];
         while(char_index > index) {
             --rank_entry_index;
@@ -249,7 +255,7 @@ char get_char_rank(const unsigned index, BWTDecode *decode_info, unsigned *next_
                 --rank_index;
             }
             out_char =
-                LANGUAGE[((decode_info->rankTable[rank_index] >> (rank_entry_index*BITS_PER_SYMBOL)) & 0b11) + 1];
+                LANGUAGE[((decode_info->rankTable[page_index].symbol_array[rank_index] >> (rank_entry_index*BITS_PER_SYMBOL)) & 0b11) + 1];
             --tempRunCount[out_char];
             --char_index;
 #ifdef DEBUG
@@ -322,7 +328,12 @@ int do_stuff2(BWTDecode *decode_info,
 
         if (output_buffer_index == 0) {
             while((res = aio_error(&aiocbp)) == EINPROGRESS && first_write) ++busy_waits;
-            if (res != 0) exit(1);
+            if (res != 0 && first_write) {
+#ifdef DEBUG
+                fprintf(stderr, "index=%d,res=%d,error=%s\n", index, res, strerror(res));
+#endif
+                exit(1);
+            }
 #ifdef DEBUG
             printf("File Size %ld, index %d\n", file_size, index);
 #endif
@@ -337,7 +348,12 @@ int do_stuff2(BWTDecode *decode_info,
                 res = aio_write(&aiocbp);
                 aiocbp_curr = 0;
             }
-            if (res != 0) exit(1);
+            if (res != 0) {
+#ifdef DEBUG
+                perror("AIO write instruction failed");
+#endif
+                exit(1);
+            }
             first_write = TRUE;
 
             output_buffer_index = sizeof(output_buffer);
