@@ -2,11 +2,14 @@ CXX=gcc
 CFLAGS=-Wextra -Wall -Werror --std=c11
 LDFLAGS=-lrt
 
-default: CFLAGS += -O3 -s
+default: CFLAGS += -O3
 default: executables
 
 debug: CFLAGS += -DDEBUG -g
 debug: executables 
+
+perf: CFLAGS += -O3 -g
+perf: executables
 
 executables: bwtdecode
 
