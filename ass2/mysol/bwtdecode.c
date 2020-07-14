@@ -17,8 +17,8 @@
 #define RANK_ENTRY_MASK 0b11
 #define BITS_PER_SYMBOL 2
 #define RANK_TABLE_SIZE (15728640/RANK_ENTRY_SIZE) // 4 chars per 8 bits (2 bits per char)
-#define INPUT_BUF_SIZE 4096
-#define OUTPUT_BUF_SIZE 190000
+#define INPUT_BUF_SIZE 8192
+#define OUTPUT_BUF_SIZE 200000
 
 #define FALSE 0
 #define TRUE 1
@@ -94,11 +94,11 @@ static inline unsigned get_char_index(const char c) {
 static inline unsigned get_rank_entry_char_index(const char c) {
 #ifdef DEBUG
     switch(c)  {
-        case 'A': return 1;
-        case 'C': return 2;
-        case 'G': return 3;
-        case 'T': return 4;
-        case '\n': return 0;
+        case 'A': return 0;
+        case 'C': return 1;
+        case 'G': return 2;
+        case 'T': return 3;
+        case '\n': return 3;
     };
     fprintf(stderr, "FATAL UNKOWN CHARACTER %d\n", c);
     exit(1);
@@ -136,6 +136,7 @@ off_t open_input_file(BWTDecode* decode_info, char *bwt_file_path) {
     return res;
 }
 
+long long read_busy_waits = 0;
 // '\n'ACGT
 void build_tables(BWTDecode *decode_info) {
     ssize_t k;
@@ -143,6 +144,15 @@ void build_tables(BWTDecode *decode_info) {
     unsigned rank_index = 0;
     unsigned page_index = 0;
     char in_buffer[INPUT_BUF_SIZE];
+    // char in_buffer2[INPUT_BUF_SIZE];
+    // struct aiocb aiocbp;
+    // memset(&aiocbp, 0, sizeof(struct aiocb));
+    // char first_write = FALSE;
+    // char aiocbp_curr = 0;
+    // aiocbp.aio_fildes = decode_info->bwt_file_fd;
+    // aiocbp.aio_buf = in_buffer;
+    // aiocbp.aio_nbytes = INPUT_BUF_SIZE;
+
     while((k = read(decode_info->bwt_file_fd, in_buffer, INPUT_BUF_SIZE)) > 0) {
         for (ssize_t i = 0; i < k;) {
             // Clear out page ready to input symbols
@@ -234,10 +244,10 @@ char get_char_rank(const unsigned index, BWTDecode *decode_info, unsigned *next_
     int rank_entry_index = (char_index & 0b11);
     unsigned rank_index = (char_index - page_index * TABLE_SIZE) / RANK_ENTRY_SIZE;
     unsigned out_char;
-    if (direction == 1 &&
-         char_index <= decode_info->endingCharIndex && decode_info->endingCharIndex <= index)
+    if (__glibc_unlikely(direction == 1 &&
+         char_index <= decode_info->endingCharIndex && decode_info->endingCharIndex <= index))
         --tempRunCount['T'];
-    else if(index <= decode_info->endingCharIndex && decode_info->endingCharIndex <= char_index) {
+    else if(__glibc_unlikely(index <= decode_info->endingCharIndex && decode_info->endingCharIndex <= char_index)) {
         ++tempRunCount['T'];
     }
 
@@ -249,9 +259,9 @@ char get_char_rank(const unsigned index, BWTDecode *decode_info, unsigned *next_
         out_char =
             LANGUAGE[((decode_info->rankTable[page_index].symbol_array[rank_index] >> (rank_entry_index*BITS_PER_SYMBOL)) & 0b11) + 1];
         ++tempRunCount[out_char];
-        while(char_index < index) {
+        while(__glibc_likely(char_index < index)) {
             ++rank_entry_index;
-            if (rank_entry_index == RANK_ENTRY_SIZE) {
+            if (__glibc_unlikely(rank_entry_index == RANK_ENTRY_SIZE)) {
                 rank_entry_index = 0;
                 ++rank_index;
             }
@@ -265,9 +275,9 @@ char get_char_rank(const unsigned index, BWTDecode *decode_info, unsigned *next_
         out_char =
             LANGUAGE[((decode_info->rankTable[page_index].symbol_array[rank_index] >> (rank_entry_index*BITS_PER_SYMBOL)) & 0b11) + 1];
         --tempRunCount[out_char];
-        while(char_index > index) {
+        while(__glibc_likely(char_index > index)) {
             --rank_entry_index;
-            if (rank_entry_index == -1) {
+            if (__glibc_unlikely(rank_entry_index == -1)) {
                 rank_entry_index = RANK_ENTRY_SIZE - 1;
                 --rank_index;
             }
@@ -421,7 +431,7 @@ int main(int argc, char** argv) {
     close(bwtDecode.bwt_file_fd);
 
     printf("reader timer %lf\n", reader_timer);
-    printf("busy waits   %lu\n", busy_waits);
+    printf("write busy waits   %lu\n", busy_waits);
 
     return 0;
 }
