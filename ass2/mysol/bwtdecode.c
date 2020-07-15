@@ -17,7 +17,7 @@
 #define RANK_ENTRY_MASK 0b11
 #define BITS_PER_SYMBOL 2
 #define RANK_TABLE_SIZE (15728640/RANK_ENTRY_SIZE) // 4 chars per 8 bits (2 bits per char)
-#define INPUT_BUF_SIZE 8192
+#define INPUT_BUF_SIZE 524288
 #define OUTPUT_BUF_SIZE 210000
 
 #define FALSE 0
@@ -87,13 +87,13 @@ static inline unsigned get_char_index(const char c) {
     exit(1);
 #else
     switch(c)  {
-        // case 'A': return 1;
+        case 'A': return 1;
         case 'C': return 2;
         case 'G': return 3;
         case 'T': return 4;
         case '\n': return 0;
-        default: return 1;
     };
+    exit(1);
 #endif
 }
 
@@ -123,6 +123,12 @@ static inline unsigned get_rank_entry_char_index(const char c) {
 // 0000   0010   0110  1001 
 // 0 1 2 3
 // 0000   0001   0010  0011
+// A + B + C + D == T <= 15mil . 8 bytes (64 bits). naive = 9 bytes (72 bits).
+//     A
+//   B   C
+// 
+//
+
 
 off_t open_input_file(BWTDecode* decode_info, char *bwt_file_path) {
     int fd = open(bwt_file_path, O_RDONLY);
@@ -187,8 +193,6 @@ void build_tables(BWTDecode *decode_info) {
                 // 00000001 00000010 00000011 00000010
                 // 00000000 00000000 00000000 01101110
                 // Put symbol into rank array
-                // decode_info->rankTable[page_index-1].symbol_array[rank_index] |=
-                //     ((char_val - 1) & 0b11) << (j*BITS_PER_SYMBOL);
                 decode_info->rankTable[page_index-1].symbol_array[rank_index] |=
                     ((char_val - 1) & 0b11) << (j*BITS_PER_SYMBOL);
 
@@ -237,6 +241,7 @@ void print_cumtable(const BWTDecode *decode_info) {
 
 double reader_timer = 0;
 u_int64_t busy_waits = 0;
+BWTDecode bwtDecode = {.CTable = {0}};
 
 char get_char_rank(const unsigned index, BWTDecode *decode_info, unsigned *next_index) {
     const unsigned snapshot_page_index = index / TABLE_SIZE + ((index % TABLE_SIZE > TABLE_SIZE / 2) ? 1 : 0);
@@ -424,7 +429,6 @@ int do_stuff2(BWTDecode *decode_info,
     return 0;
 }
 
-BWTDecode bwtDecode = {.CTable = {0}};
 
 int main(int argc, char** argv) {
     if (argc != 3) {
