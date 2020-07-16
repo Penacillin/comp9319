@@ -116,23 +116,18 @@ void prepare_bwt_search(BWTSearch *search_info) {
     unsigned tempRunCount[128] = {0};
     char in_buffer[INPUT_BUF_SIZE];
 
+    // First snapshot starting state
+    search_info->rank_table[page_index].a_entry.val = 0;
+    search_info->rank_table[page_index].b_entry.val |= 0;
+    search_info->rank_table[page_index].c_entry.val |= 0;
+    search_info->rank_table[page_index].d_entry.val |= 0 << 8;
+    ++page_index;
+
     while((k = read(search_info->bwt_file_fd, in_buffer, INPUT_BUF_SIZE)) > 0) {
         for (ssize_t i = 0; i < k;) {
             // Clear out page ready to input symbols
             search_info->symbol_pages[search_info->cache_clock].symbol_array[rank_index] = 0;
             for (unsigned j = 0; j < SYMBOLS_PER_CHAR && i < k; ++j, ++i) {
-                // Snapshot rank table run counts
-                if (__glibc_unlikely(curr_index % PAGE_SIZE == 0)) {
-                    // assert(page_index < PAGE_TABLE_SIZE);
-                    search_info->rank_table[page_index].a_entry.val = tempRunCount[LANGUAGE[1]];
-                    search_info->rank_table[page_index].b_entry.val |= tempRunCount[LANGUAGE[2]];
-                    search_info->rank_table[page_index].c_entry.val |= tempRunCount[LANGUAGE[3]];
-                    search_info->rank_table[page_index].d_entry.val |= tempRunCount[LANGUAGE[4]] << 8;
-                    ++page_index;
-                    search_info->cache_clock = (search_info->cache_clock + 1) % PAGE_CACHE_SIZE;
-                    rank_index = 0;
-                }
-
                 const char c = in_buffer[i];
                 if (__glibc_unlikely(c == '\n')) search_info->ending_char_index = curr_index;
                 // Add to all CTable above char
@@ -150,6 +145,21 @@ void prepare_bwt_search(BWTSearch *search_info) {
                 ++tempRunCount[(unsigned)c];
 
                 ++curr_index;
+                // Snapshot rank table run counts
+                if (__glibc_unlikely(curr_index % PAGE_SIZE == 0)) {
+                    // assert(page_index < PAGE_TABLE_SIZE);
+                    search_info->rank_table[page_index].a_entry.val = tempRunCount[LANGUAGE[1]];
+                    search_info->rank_table[page_index].b_entry.val |= tempRunCount[LANGUAGE[2]];
+                    search_info->rank_table[page_index].c_entry.val |= tempRunCount[LANGUAGE[3]];
+                    search_info->rank_table[page_index].d_entry.val |= tempRunCount[LANGUAGE[4]] << 8;
+                    
+                    search_info->cache_to_page[search_info->cache_clock] = page_index;
+                    search_info->page_to_cache[page_index] = search_info->cache_clock;
+                    ++page_index;
+                    search_info->cache_clock = (search_info->cache_clock + 1) % PAGE_CACHE_SIZE;
+                    rank_index = 0;
+                    break;
+                }
             }
             ++rank_index;
         }
@@ -162,19 +172,33 @@ void prepare_bwt_search(BWTSearch *search_info) {
     search_info->rank_table_size = curr_index;
 }
 
+unsigned get_occurence(const char c, const size_t index) {
+    return 0;
+}
+
 int process_search_query(BWTSearch *search_info,
                          const char *search_query,
                          const size_t search_query_size) {
-    (void)search_info;
-    (void)search_query;
-    (void)search_query_size;
-    return 0;
+    --search_query_size;
+    size_t i = search_query_size;
+    char c = search_query_size
+    unsigned first = search_info->CTable[c] + 1;
+    unsigned last = search_info->CTable[LANGUAGE[get_char_index(c)+1]];
+
+    while (first < last && i >= 2) {
+        c = search_query[i-1];
+        first = search_info->CTable[c] + get_occurence(c, first - 1) + 1;
+        last = search_info->CTable[c] + get_occurence(c, last);
+        --i;
+    }
+    if (last < first) return 0;
+    return last - first + 1;
 }
 
 void process_search_queries(BWTSearch *search_info) {
     char query_buf[QUERY_MAX_SIZE + 1];
     ssize_t query_size;
-    while((query_size = read(STDIN_FILENO, query_buf, QUERY_MAX_SIZE)) != EOF) {
+    while((query_size = read(STDIN_FILENO, query_buf, QUERY_MAX_SIZE)) > 0) {
         const int num_matches = process_search_query(search_info, query_buf, query_size);
         printf("%d\n", num_matches);
     }
@@ -218,13 +242,13 @@ int main(int argc, char *argv[]) {
     prepare_bwt_search(&bwt_search);
 
 #ifdef DEBUG
-    print_ctable(decode_info);
-    print_ranktable(decode_info);
-    print_cumtable(decode_info);
+    print_ctable(&bwt_search);
+    print_ranktable(&bwt_search);
+    print_cumtable(&bwt_search);
 #endif
 
 #ifdef DEBUG
-    printf("BWT file size %lu\n", bwt_file_size);
+    fprintf(stderr, "BWT file size %lu\n", bwt_file_size);
 #else
     (void)bwt_file_size;
 #endif
