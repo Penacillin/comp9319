@@ -12,7 +12,7 @@
 #define LANGUAGE_SIZE 5
 const unsigned LANGUAGE[LANGUAGE_SIZE] = {'\n', 'A', 'C', 'G', 'T'};
 #define ENDING_CHAR '\n'
-#define QUERY_MAX_SIZE 100
+#define QUERY_MAX_SIZE 101
 
 #define INPUT_BUF_SIZE 4096
 
@@ -59,7 +59,7 @@ typedef struct _BWTSearch {
 
     unsigned char cache_clock;
     u_int32_t cache_to_page[PAGE_CACHE_SIZE];
-    char page_to_cache[MAX_INPUT_SIZE/PAGE_SIZE + 1];
+    unsigned char page_to_cache[MAX_INPUT_SIZE/PAGE_SIZE + 1];
 
     int bwt_file_fd;
 } BWTSearch;
@@ -116,11 +116,17 @@ void prepare_bwt_search(BWTSearch *search_info) {
     unsigned tempRunCount[128] = {0};
     char in_buffer[INPUT_BUF_SIZE];
 
+#ifdef DEBUG
+    memset(search_info->page_to_cache, 255, sizeof(search_info->page_to_cache));
+#endif
+
     // First snapshot starting state
     search_info->rank_table[page_index].a_entry.val = 0;
     search_info->rank_table[page_index].b_entry.val |= 0;
     search_info->rank_table[page_index].c_entry.val |= 0;
     search_info->rank_table[page_index].d_entry.val |= 0 << 8;
+    search_info->cache_to_page[search_info->cache_clock] = page_index;
+    search_info->page_to_cache[page_index] = search_info->cache_clock;
     ++page_index;
 
     while((k = read(search_info->bwt_file_fd, in_buffer, INPUT_BUF_SIZE)) > 0) {
@@ -157,6 +163,7 @@ void prepare_bwt_search(BWTSearch *search_info) {
                     search_info->page_to_cache[page_index] = search_info->cache_clock;
                     ++page_index;
                     search_info->cache_clock = (search_info->cache_clock + 1) % PAGE_CACHE_SIZE;
+                    search_info->page_to_cache[search_info->cache_to_page[search_info->cache_clock]] = 255;
                     rank_index = 0;
                     break;
                 }
@@ -172,45 +179,125 @@ void prepare_bwt_search(BWTSearch *search_info) {
     search_info->rank_table_size = curr_index;
 }
 
-unsigned get_occurence(const char c, const size_t index) {
+unsigned char get_cache_for_index(BWTSearch *search_info, unsigned index) {
+    const unsigned page_index = index / PAGE_SIZE;
+    if (search_info->page_to_cache[page_index] != 255)
+        return search_info->page_to_cache[page_index];
+    
+#ifdef DEBUG
+    fprintf(stderr, "index %u, page %u not in cache", index, page_index);
+    exit(1);
+#endif
+
     return 0;
+}
+
+unsigned get_occurence(BWTSearch *search_info, const char c, const size_t index) {
+    const unsigned char cache_index = get_cache_for_index(search_info, index);
+
+    const unsigned snapshot_page_index = index / PAGE_SIZE + ((index % PAGE_SIZE > PAGE_SIZE / 2) ? 1 : 0);
+    const unsigned page_index = index / PAGE_SIZE;
+    const int direction =  (index % PAGE_SIZE > PAGE_SIZE / 2) ? -1 : 1;
+    unsigned tempRunCount[128];
+    tempRunCount['\n'] = 0;
+    // Load in char counts until this page
+    tempRunCount[LANGUAGE[1]] = search_info->rank_table[snapshot_page_index].a_entry.val & RUN_COUNT_LOWER_MASK;
+    tempRunCount[LANGUAGE[2]] = search_info->rank_table[snapshot_page_index].b_entry.val & RUN_COUNT_LOWER_MASK;
+    tempRunCount[LANGUAGE[3]] = search_info->rank_table[snapshot_page_index].c_entry.val & RUN_COUNT_LOWER_MASK;
+    tempRunCount[LANGUAGE[4]] = search_info->rank_table[snapshot_page_index].d_entry.val >> 8;
+    // clock_t t = clock();
+    // Fill out char counts for this page
+    unsigned char_index = snapshot_page_index * PAGE_SIZE - (direction == 1 ? 0 : 1);
+    int rank_entry_index = (char_index & 0b11);
+    unsigned rank_index = (char_index - page_index * PAGE_SIZE) / SYMBOLS_PER_CHAR;
+    unsigned out_char;
+    if (__glibc_unlikely(direction == 1 &&
+         char_index <= search_info->ending_char_index && search_info->ending_char_index <= index))
+        --tempRunCount['T'];
+    else if(__glibc_unlikely(index <= search_info->ending_char_index && search_info->ending_char_index <= char_index)) {
+        ++tempRunCount['T'];
+    }
+
+#ifdef DEBUG
+    fprintf(stderr, "Using page %d. char_index %d, rank_index %d, rank_entry %d\n",
+             page_index, char_index, rank_index, rank_entry_index);
+#endif
+    if (direction == 1) {
+        out_char =
+            LANGUAGE[((search_info->symbol_pages[cache_index].symbol_array[rank_index] >> (rank_entry_index*BITS_PER_SYMBOL)) & 0b11) + 1];
+        ++tempRunCount[out_char];
+        while(__glibc_likely(char_index < index)) {
+            ++rank_entry_index;
+            if (rank_entry_index == SYMBOLS_PER_CHAR) {
+                rank_entry_index = 0;
+                ++rank_index;
+            }
+            out_char =
+                LANGUAGE[((search_info->symbol_pages[cache_index].symbol_array[rank_index] >> (rank_entry_index*BITS_PER_SYMBOL)) & 0b11) + 1];
+            ++tempRunCount[out_char];
+            ++char_index;
+        };
+        --tempRunCount[out_char];
+    } else {
+        out_char =
+            LANGUAGE[((search_info->symbol_pages[cache_index].symbol_array[rank_index] >> (rank_entry_index*BITS_PER_SYMBOL)) & 0b11) + 1];
+        --tempRunCount[out_char];
+        while(__glibc_likely(char_index > index)) {
+            --rank_entry_index;
+            if (rank_entry_index == -1) {
+                rank_entry_index = SYMBOLS_PER_CHAR - 1;
+                --rank_index;
+            }
+            out_char =
+                LANGUAGE[((search_info->symbol_pages[cache_index].symbol_array[rank_index] >> (rank_entry_index*BITS_PER_SYMBOL)) & 0b11) + 1];
+            --tempRunCount[out_char];
+            --char_index;
+#ifdef DEBUG
+            fprintf(stderr, "< %d %c %d\n", char_index, out_char, tempRunCount[out_char]);
+#endif
+        };
+    }
+    // reader_timer += ((double)clock() - t)/CLOCKS_PER_SEC;
+#ifdef DEBUG
+    printf("%c %d %d\n", out_char, tempRunCount[out_char], search_info->CTable[out_char]);
+#endif
+    return tempRunCount[(unsigned)c] + 1;
 }
 
 int process_search_query(BWTSearch *search_info,
                          const char *search_query,
                          const size_t search_query_size) {
-    --search_query_size;
-    size_t i = search_query_size;
-    char c = search_query_size
-    unsigned first = search_info->CTable[c] + 1;
+    size_t i = search_query_size - 1;
+    char c = search_query[i];
+    unsigned first = search_info->CTable[(unsigned)c] + 1;
     unsigned last = search_info->CTable[LANGUAGE[get_char_index(c)+1]];
 
     while (first < last && i >= 2) {
         c = search_query[i-1];
-        first = search_info->CTable[c] + get_occurence(c, first - 1) + 1;
-        last = search_info->CTable[c] + get_occurence(c, last);
+        first = search_info->CTable[(unsigned)c] + get_occurence(search_info, c, first - 1) + 1;
+        last = search_info->CTable[(unsigned)c] + get_occurence(search_info, c, last);
         --i;
     }
     if (last < first) return 0;
     return last - first + 1;
 }
 
-void process_search_queries(BWTSearch *search_info) {
+void read_search_queries(BWTSearch *search_info) {
     char query_buf[QUERY_MAX_SIZE + 1];
     ssize_t query_size;
     while((query_size = read(STDIN_FILENO, query_buf, QUERY_MAX_SIZE)) > 0) {
-        const int num_matches = process_search_query(search_info, query_buf, query_size);
+        const int num_matches = process_search_query(search_info, query_buf, query_size - 1);
         printf("%d\n", num_matches);
     }
 }
 
 void print_ctable(const BWTSearch *search_info) {
-    for (unsigned i = 0; i < 5; ++i) {
+    for (unsigned i = 0; i < LANGUAGE_SIZE; ++i) {
         printf("%c: %d\n", LANGUAGE[i], search_info->CTable[(unsigned)LANGUAGE[i]]);
     }
 }
 
-void print_ranktable(const BWTSearch *search_info) {
+void print_rank_table(const BWTSearch *search_info) {
     for (unsigned i = 0; i < search_info->rank_table_size; ++i) {
         const unsigned rank_entry_index = i % SYMBOLS_PER_CHAR;
         const unsigned page_index = i / PAGE_SIZE;
@@ -243,7 +330,7 @@ int main(int argc, char *argv[]) {
 
 #ifdef DEBUG
     print_ctable(&bwt_search);
-    print_ranktable(&bwt_search);
+    print_rank_table(&bwt_search);
     print_cumtable(&bwt_search);
 #endif
 
@@ -253,6 +340,7 @@ int main(int argc, char *argv[]) {
     (void)bwt_file_size;
 #endif
 
-    process_search_queries(&bwt_search);
+    read_search_queries(&bwt_search);
 
+    return 0;
 }
