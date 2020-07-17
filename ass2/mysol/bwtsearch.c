@@ -10,7 +10,7 @@
 #include <time.h>
 
 #define LANGUAGE_SIZE 5
-const unsigned LANGUAGE[LANGUAGE_SIZE] = {'\n', 'A', 'C', 'G', 'T'};
+const unsigned LANGUAGE[] = {'\n', 'A', 'C', 'G', 'T', 'U'};
 #define ENDING_CHAR '\n'
 #define QUERY_MAX_SIZE 101
 
@@ -138,7 +138,7 @@ void prepare_bwt_search(BWTSearch *search_info) {
                 if (__glibc_unlikely(c == '\n')) search_info->ending_char_index = curr_index;
                 // Add to all CTable above char
                 const unsigned char_val = get_char_index(c);
-                for (unsigned k = char_val + 1; k < LANGUAGE_SIZE; ++k) {
+                for (unsigned k = char_val + 1; k < LANGUAGE_SIZE + 1; ++k) {
                     ++(search_info->CTable[LANGUAGE[k]]);
                 }
                 // 00000001 00000010 00000011 00000010
@@ -175,6 +175,8 @@ void prepare_bwt_search(BWTSearch *search_info) {
     search_info->rank_table[page_index].b_entry.val |= tempRunCount[LANGUAGE[2]];
     search_info->rank_table[page_index].c_entry.val |= tempRunCount[LANGUAGE[3]];
     search_info->rank_table[page_index].d_entry.val |= tempRunCount[LANGUAGE[4]] << 8;
+
+    // search_info->CTable[LANGUAGE[LANGUAGE_SIZE]] = 
 
     search_info->rank_table_size = curr_index;
 }
@@ -219,8 +221,8 @@ unsigned get_occurence(BWTSearch *search_info, const char c, const size_t index)
     }
 
 #ifdef DEBUG
-    fprintf(stderr, "Using page %d. char_index %d, rank_index %d, rank_entry %d\n",
-             page_index, char_index, rank_index, rank_entry_index);
+    fprintf(stderr, "index %ld, Using page %d. char_index %d, rank_index %d, rank_entry %d\n",
+             index, page_index, char_index, rank_index, rank_entry_index);
 #endif
     if (direction == 1) {
         out_char =
@@ -267,15 +269,22 @@ unsigned get_occurence(BWTSearch *search_info, const char c, const size_t index)
 int process_search_query(BWTSearch *search_info,
                          const char *search_query,
                          const size_t search_query_size) {
+#ifdef DEBUG
+    fprintf(stderr, "querying: '");
+    for (size_t i = 0; i < search_query_size; ++i)
+        putc(search_query[i], stderr);
+    fprintf(stderr, "'\n");
+#endif
     size_t i = search_query_size - 1;
+    // Begin algo
     char c = search_query[i];
-    unsigned first = search_info->CTable[(unsigned)c] + 1;
-    unsigned last = search_info->CTable[LANGUAGE[get_char_index(c)+1]];
-
-    while (first < last && i >= 2) {
+    unsigned first = search_info->CTable[(unsigned)c];
+    unsigned last = search_info->CTable[LANGUAGE[get_char_index(c)+1]] - 1;
+    // --i;
+    while (first <= last && i >= 1) {
         c = search_query[i-1];
-        first = search_info->CTable[(unsigned)c] + get_occurence(search_info, c, first - 1) + 1;
-        last = search_info->CTable[(unsigned)c] + get_occurence(search_info, c, last);
+        first = search_info->CTable[(unsigned)c] + get_occurence(search_info, c, first);
+        last = search_info->CTable[(unsigned)c] + get_occurence(search_info, c, last+1) - 1;
         --i;
     }
     if (last < first) return 0;
