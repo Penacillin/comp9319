@@ -239,7 +239,6 @@ unsigned get_occurence(BWTSearch *search_info, const char c, const size_t index)
             ++tempRunCount[out_char];
             ++char_index;
         };
-        --tempRunCount[out_char];
     } else {
         out_char =
             LANGUAGE[((search_info->symbol_pages[cache_index].symbol_array[rank_index] >> (rank_entry_index*BITS_PER_SYMBOL)) & 0b11) + 1];
@@ -263,7 +262,7 @@ unsigned get_occurence(BWTSearch *search_info, const char c, const size_t index)
 #ifdef DEBUG
     printf("%c %d %d\n", out_char, tempRunCount[out_char], search_info->CTable[out_char]);
 #endif
-    return tempRunCount[(unsigned)c] + 1;
+    return tempRunCount[(unsigned)c];
 }
 
 int process_search_query(BWTSearch *search_info,
@@ -280,11 +279,16 @@ int process_search_query(BWTSearch *search_info,
     char c = search_query[i];
     unsigned first = search_info->CTable[(unsigned)c];
     unsigned last = search_info->CTable[LANGUAGE[get_char_index(c)+1]] - 1;
-    // --i;
+#ifdef DEBUG
+    fprintf(stderr, "first=%u,last=%u\n", first, last);
+#endif
     while (first <= last && i >= 1) {
         c = search_query[i-1];
-        first = search_info->CTable[(unsigned)c] + get_occurence(search_info, c, first);
-        last = search_info->CTable[(unsigned)c] + get_occurence(search_info, c, last+1) - 1;
+        first = search_info->CTable[(unsigned)c] + get_occurence(search_info, c, first-1);
+        last = search_info->CTable[(unsigned)c] + get_occurence(search_info, c, last) - 1;
+#ifdef DEBUG
+        fprintf(stderr, "first=%u,last=%u\n", first, last);
+#endif
         --i;
     }
     if (last < first) return 0;
