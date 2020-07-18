@@ -243,7 +243,7 @@ double reader_timer = 0;
 u_int64_t busy_waits = 0;
 BWTDecode bwtDecode = {.CTable = {0}};
 
-char get_char_rank(const unsigned index, BWTDecode *decode_info, unsigned *next_index) {
+static inline char get_char_rank(const unsigned index, BWTDecode *decode_info, unsigned *next_index) {
     const unsigned snapshot_page_index = index / TABLE_SIZE + ((index % TABLE_SIZE > TABLE_SIZE / 2) ? 1 : 0);
     const unsigned page_index = index / TABLE_SIZE;
     const int direction =  (index % TABLE_SIZE > TABLE_SIZE / 2) ? -1 : 1;
