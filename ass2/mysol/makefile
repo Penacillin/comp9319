@@ -8,7 +8,7 @@ default: executables
 debug: CFLAGS += -DDEBUG -g
 debug: executables 
 
-perf: CFLAGS += -O3 -g
+perf: CFLAGS += -O3 -g -pg -DPERF
 perf: executables
 
 executables: bwtdecode bwtsearch
