@@ -368,9 +368,13 @@ int main(int argc, char *argv[]) {
     }
 
     const off_t bwt_file_size = open_input_file(&bwt_search, argv[1]);
+#ifdef PERF
     clock_t t = clock();
+#endif
     prepare_bwt_search(&bwt_search);
-    fprintf(stderr, "build_tables() took %f seconds to execute \n", ((double)t)/CLOCKS_PER_SEC);
+#ifdef PERF
+    fprintf(stderr, "build_tables() took %f seconds to execute \n", ((double)clock() - t)/CLOCKS_PER_SEC);
+#endif
 
 #ifdef DEBUG
     fprintf(stderr, "RankEntry size %ld\n", sizeof(RankEntry));
@@ -386,6 +390,11 @@ int main(int argc, char *argv[]) {
 #endif
 
     read_search_queries(&bwt_search);
+
+#ifdef PERF
+    fprintf(stderr, "Cache hits %lld\n", cache_hits);
+    fprintf(stderr, "Cache misses %lld\n", cache_misses);
+#endif
 
     return 0;
 }
