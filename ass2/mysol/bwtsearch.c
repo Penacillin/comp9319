@@ -192,8 +192,7 @@ unsigned char get_cache_for_index(BWTSearch *search_info, const unsigned index) 
         return search_info->page_to_cache[page_index];
 
 #ifdef DEBUG
-    fprintf(stderr, "index %u, page %u not in cache", index, page_index);
-    exit(1);
+    fprintf(stderr, "index %u, page %u not in cache\n", index, page_index);
 #endif
     // invalidate page at cache clock that we're about to write over
     search_info->page_to_cache[search_info->cache_to_page[search_info->cache_clock]] = 255;
@@ -203,6 +202,7 @@ unsigned char get_cache_for_index(BWTSearch *search_info, const unsigned index) 
     ssize_t k = read(search_info->bwt_file_fd, in_buffer, PAGE_SIZE);
     unsigned rank_index = 0;
     for (ssize_t i = 0; i < k;) {
+        search_info->symbol_pages[search_info->cache_clock].symbol_array[rank_index] = 0;
         for (unsigned j = 0; j < SYMBOLS_PER_CHAR && i < k; ++j, ++i) {
             const unsigned char_val = get_char_index(in_buffer[i]);
             search_info->symbol_pages[search_info->cache_clock].symbol_array[rank_index] |=
