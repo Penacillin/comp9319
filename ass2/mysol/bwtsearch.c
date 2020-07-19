@@ -18,12 +18,13 @@ const unsigned LANGUAGE[] = {'\n', 'A', 'C', 'G', 'T', 'U'};
 #define ENDING_CHAR '\n'
 #define QUERY_MAX_SIZE 101
 
-#define INPUT_BUF_SIZE 4096
+#define INPUT_BUF_SIZE 524288
 
 #define MAX_INPUT_SIZE 104857600
 #define SYMBOLS_PER_CHAR 4
 #define BITS_PER_SYMBOL 2
 #define PAGE_SIZE 256
+#define UNCACHED_PAGE 255
 #define PAGE_CACHE_SIZE 128
 
 typedef struct _PageEntry {
@@ -120,24 +121,24 @@ void prepare_bwt_search(BWTSearch *search_info) {
     unsigned tempRunCount[128] = {0};
     char in_buffer[INPUT_BUF_SIZE];
 
-#ifdef DEBUG
+// #ifdef DEBUG
     memset(search_info->page_to_cache, 255, sizeof(search_info->page_to_cache));
-#endif
+// #endif
 
     // First snapshot starting state
     search_info->rank_table[page_index].a_entry.val = 0;
     search_info->rank_table[page_index].b_entry.val = 0;
     search_info->rank_table[page_index].c_entry.val = 0;
     search_info->rank_table[page_index].d_entry.val = 0;
-    search_info->cache_to_page[search_info->cache_clock] = page_index;
-    search_info->page_to_cache[page_index] = search_info->cache_clock;
+    // search_info->cache_to_page[search_info->cache_clock] = page_index;
+    // search_info->page_to_cache[page_index] = search_info->cache_clock;
     ++page_index;
 
     while((k = read(search_info->bwt_file_fd, in_buffer, INPUT_BUF_SIZE)) > 0) {
-        for (ssize_t i = 0; i < k;) {
+        for (ssize_t i = 0; i < k; ++i) {
             // Clear out page ready to input symbols
-            search_info->symbol_pages[search_info->cache_clock].symbol_array[rank_index] = 0;
-            for (unsigned j = 0; j < SYMBOLS_PER_CHAR && i < k; ++j, ++i) {
+            // search_info->symbol_pages[search_info->cache_clock].symbol_array[rank_index] = 0;
+            // for (unsigned j = 0; j < SYMBOLS_PER_CHAR && i < k; ++j, ++i) {
                 const char c = in_buffer[i];
                 if (__glibc_unlikely(c == '\n')) search_info->ending_char_index = curr_index;
                 // Add to all CTable above char
@@ -148,8 +149,8 @@ void prepare_bwt_search(BWTSearch *search_info) {
                 // 00000001 00000010 00000011 00000010
                 // 00000000 00000000 00000000 01101110
                 // Put symbol into symbol page
-                search_info->symbol_pages[search_info->cache_clock].symbol_array[rank_index] |=
-                    ((char_val - 1) & 0b11) << (j*BITS_PER_SYMBOL);
+                // search_info->symbol_pages[search_info->cache_clock].symbol_array[rank_index] |=
+                //     ((char_val - 1) & 0b11) << (j*BITS_PER_SYMBOL);
 
                 // Run count for rank table
                 ++tempRunCount[(unsigned)c];
@@ -163,17 +164,17 @@ void prepare_bwt_search(BWTSearch *search_info) {
                     search_info->rank_table[page_index].c_entry.val = tempRunCount[LANGUAGE[3]];
                     search_info->rank_table[page_index].d_entry.val = tempRunCount[LANGUAGE[4]];
 
-                    search_info->cache_to_page[search_info->cache_clock] = page_index;
-                    search_info->page_to_cache[page_index] = search_info->cache_clock;
+                    // search_info->cache_to_page[search_info->cache_clock] = page_index;
+                    // search_info->page_to_cache[page_index] = search_info->cache_clock;
                     ++page_index;
-                    search_info->cache_clock = (search_info->cache_clock + 1) % PAGE_CACHE_SIZE;
-                    search_info->page_to_cache[search_info->cache_to_page[search_info->cache_clock]] = 255;
-                    rank_index = 0;
-                    ++i;
+                    // search_info->cache_clock = (search_info->cache_clock + 1) % PAGE_CACHE_SIZE;
+                    // search_info->page_to_cache[search_info->cache_to_page[search_info->cache_clock]] = UNCACHED_PAGE;
+                    // rank_index = 0;
+                    // ++i;
                     goto FINISHED_PAGE_LABEL;
                 }
-            }
-            ++rank_index;
+            // }
+            // ++rank_index;
 FINISHED_PAGE_LABEL:
             (void)rank_index;
         }
@@ -186,16 +187,28 @@ FINISHED_PAGE_LABEL:
     search_info->rank_table_size = curr_index;
 }
 
+#ifdef PERF
+unsigned long long cache_hits = 0;
+unsigned long long cache_misses = 0;
+#endif
+
 unsigned char get_cache_for_index(BWTSearch *search_info, const unsigned index) {
     const unsigned page_index = index / PAGE_SIZE;
-    if (search_info->page_to_cache[page_index] != 255)
+    if (search_info->page_to_cache[page_index] != UNCACHED_PAGE) {
+#ifdef PERF
+        ++cache_hits;
+#endif
         return search_info->page_to_cache[page_index];
+    }
+#ifdef PERF
+    ++cache_misses;
+#endif
 
 #ifdef DEBUG
     fprintf(stderr, "index %u, page %u not in cache\n", index, page_index);
 #endif
     // invalidate page at cache clock that we're about to write over
-    search_info->page_to_cache[search_info->cache_to_page[search_info->cache_clock]] = 255;
+    search_info->page_to_cache[search_info->cache_to_page[search_info->cache_clock]] = UNCACHED_PAGE;
 
     char in_buffer[PAGE_SIZE];
     lseek(search_info->bwt_file_fd, page_index * PAGE_SIZE, SEEK_SET);
