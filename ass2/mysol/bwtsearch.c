@@ -9,6 +9,7 @@
 #include <assert.h>
 #include <time.h>
 #include <tmmintrin.h>
+#include <immintrin.h>
 
 #define MAX(x, y) (((x) > (y)) ? (x) : (y))
 #define MIN(x, y) (((x) < (y)) ? (x) : (y))
@@ -26,6 +27,7 @@ const unsigned LANGUAGE[] = {'\n', 'A', 'C', 'G', 'T', 'U'};
 #define PAGE_SIZE 256
 #define UNCACHED_PAGE 255
 #define PAGE_CACHE_SIZE 128
+#define RANK_TABLE_SIZE (MAX_INPUT_SIZE/PAGE_SIZE)
 
 typedef struct _PageEntry {
     char symbol_array[PAGE_SIZE/SYMBOLS_PER_CHAR];
@@ -56,7 +58,7 @@ typedef union _RankEntry {
 
 typedef struct _BWTSearch {
     u_int32_t rank_table_size;
-    RankEntry rank_table[MAX_INPUT_SIZE/PAGE_SIZE+1];
+    RankEntry rank_table[RANK_TABLE_SIZE+1];
     PageEntry symbol_pages[PAGE_CACHE_SIZE];
 
     u_int32_t ending_char_index;
@@ -64,7 +66,7 @@ typedef struct _BWTSearch {
 
     unsigned char cache_clock;
     u_int32_t cache_to_page[PAGE_CACHE_SIZE];
-    unsigned char page_to_cache[MAX_INPUT_SIZE/PAGE_SIZE + 1];
+    unsigned char page_to_cache[RANK_TABLE_SIZE + 1];
 
     int bwt_file_fd;
 } BWTSearch;
@@ -113,13 +115,35 @@ off_t open_input_file(BWTSearch* search_info, char *bwt_file_path) {
     return res;
 }
 
+// 256/8 chars per 256 bit accumulator
+#define CHAR_COUNT_STEP (256/8)
+__m256i A_CHAR_MASK;
+__m256i C_CHAR_MASK;
+__m256i G_CHAR_MASK;
+__m256i T_CHAR_MASK;
+__m256i ONE_CHAR_MASK;
+__m128i SHUFFLE_16_DOWN;
+
+static inline u_int32_t mm256_hadd_epi8(__m256i x) {
+    const __m256i quad_sum_256i_64 = _mm256_sad_epu8(x, _mm256_setzero_si256()); // 4 * 16 bit ints in lows of 4 64 bit int
+    const __m128i quad_sum_hi = _mm256_extracti128_si256(quad_sum_256i_64, 1);
+    const __m128i quad_sum_lo = _mm256_extracti128_si256(quad_sum_256i_64, 0);
+
+    const __m128i hi_pair = _mm_shuffle_epi8(quad_sum_hi, SHUFFLE_16_DOWN); // 2 * 16 bits
+    const __m128i lo_pair = _mm_shuffle_epi8(quad_sum_lo, SHUFFLE_16_DOWN); // 2 * 16 bits
+    const __m128i pair_sum = _mm_add_epi16(hi_pair, lo_pair); // 2 * 16 bits sum
+
+    return _mm_extract_epi16(pair_sum, 0) + _mm_extract_epi16(pair_sum, 1); // TODO: use 64 bit int?
+}
+
+
+
 void prepare_bwt_search(BWTSearch *search_info) {
     ssize_t k;
     unsigned curr_index = 0;
-    unsigned rank_index = 0;
     unsigned page_index = 0;
     unsigned tempRunCount[128] = {0};
-    char in_buffer[INPUT_BUF_SIZE];
+    char __attribute__((aligned (32))) in_buffer[INPUT_BUF_SIZE];
 
 // #ifdef DEBUG
     memset(search_info->page_to_cache, 255, sizeof(search_info->page_to_cache));
@@ -130,59 +154,109 @@ void prepare_bwt_search(BWTSearch *search_info) {
     search_info->rank_table[page_index].b_entry.val = 0;
     search_info->rank_table[page_index].c_entry.val = 0;
     search_info->rank_table[page_index].d_entry.val = 0;
-    // search_info->cache_to_page[search_info->cache_clock] = page_index;
-    // search_info->page_to_cache[page_index] = search_info->cache_clock;
     ++page_index;
 
-    while((k = read(search_info->bwt_file_fd, in_buffer, INPUT_BUF_SIZE)) > 0) {
-        for (ssize_t i = 0; i < k; ++i) {
+    __m256i a_accum = _mm256_set1_epi8(0); 
+    __m256i c_accum = _mm256_set1_epi8(0); 
+    __m256i g_accum = _mm256_set1_epi8(0); 
+    __m256i t_accum = _mm256_set1_epi8(0); 
+    __m256i temp_256i_buf;
+
+    while(__glibc_likely((k = read(search_info->bwt_file_fd, in_buffer, INPUT_BUF_SIZE)) > 0)) {
+        ssize_t i = 0;
+        for (; i < k - CHAR_COUNT_STEP; i += CHAR_COUNT_STEP) {
             // Clear out page ready to input symbols
-            // search_info->symbol_pages[search_info->cache_clock].symbol_array[rank_index] = 0;
-            // for (unsigned j = 0; j < SYMBOLS_PER_CHAR && i < k; ++j, ++i) {
-                const char c = in_buffer[i];
-                if (__glibc_unlikely(c == '\n')) search_info->ending_char_index = curr_index;
-                // Add to all CTable above char
-                const unsigned char_val = get_char_index(c);
-                for (unsigned l = char_val + 1; l < LANGUAGE_SIZE + 1; ++l) {
-                    ++(search_info->CTable[LANGUAGE[l]]);
-                }
-                // 00000001 00000010 00000011 00000010
-                // 00000000 00000000 00000000 01101110
-                // Put symbol into symbol page
-                // search_info->symbol_pages[search_info->cache_clock].symbol_array[rank_index] |=
-                //     ((char_val - 1) & 0b11) << (j*BITS_PER_SYMBOL);
+            const char c = in_buffer[i];
+            if (__glibc_unlikely(c == '\n')) search_info->ending_char_index = curr_index;
+            // Add to all CTable above char
+            // const unsigned char_val = get_char_index(c);
 
-                // Run count for rank table
-                ++tempRunCount[(unsigned)c];
+            temp_256i_buf = _mm256_load_si256((const __m256i*)in_buffer + i);
+            a_accum = _mm256_add_epi8(_mm256_and_si256(_mm256_cmpeq_epi8(temp_256i_buf, A_CHAR_MASK), ONE_CHAR_MASK), a_accum);
+            c_accum = _mm256_add_epi8(_mm256_and_si256(_mm256_cmpeq_epi8(temp_256i_buf, C_CHAR_MASK), ONE_CHAR_MASK), c_accum);
+            g_accum = _mm256_add_epi8(_mm256_and_si256(_mm256_cmpeq_epi8(temp_256i_buf, G_CHAR_MASK), ONE_CHAR_MASK), g_accum);
+            t_accum = _mm256_add_epi8(_mm256_and_si256(_mm256_cmpeq_epi8(temp_256i_buf, T_CHAR_MASK), ONE_CHAR_MASK), t_accum);
 
-                ++curr_index;
-                // Snapshot rank table run counts
-                if (__glibc_unlikely(curr_index % PAGE_SIZE == 0)) {
-                    // assert(page_index < PAGE_TABLE_SIZE);
-                    search_info->rank_table[page_index].a_entry.val = tempRunCount[LANGUAGE[1]];
-                    search_info->rank_table[page_index].b_entry.val = tempRunCount[LANGUAGE[2]];
-                    search_info->rank_table[page_index].c_entry.val = tempRunCount[LANGUAGE[3]];
-                    search_info->rank_table[page_index].d_entry.val = tempRunCount[LANGUAGE[4]];
+            curr_index += CHAR_COUNT_STEP;
+            // Snapshot rank table run counts
+            if (__glibc_unlikely(curr_index % PAGE_SIZE == 0)) {
+#ifdef DEBUG
+                assert(page_index < RANK_TABLE_SIZE);
+#endif
+                search_info->rank_table[page_index].a_entry.val =
+                    search_info->rank_table[page_index-1].a_entry.val + mm256_hadd_epi8(a_accum);
+                search_info->rank_table[page_index].b_entry.val =
+                    search_info->rank_table[page_index-1].b_entry.val + mm256_hadd_epi8(c_accum);
+                search_info->rank_table[page_index].c_entry.val =
+                    search_info->rank_table[page_index-1].c_entry.val + mm256_hadd_epi8(g_accum);
+                search_info->rank_table[page_index].d_entry.val =
+                    search_info->rank_table[page_index-1].d_entry.val + mm256_hadd_epi8(t_accum);
+#ifdef DEBUG
+                printf("accums: a=%d,c=%d,g=%d,t=%d\n",
+                    mm256_hadd_epi8(a_accum),
+                    mm256_hadd_epi8(c_accum),
+                    mm256_hadd_epi8(g_accum),
+                    mm256_hadd_epi8(t_accum));
+#endif
+                // TODO: only need to do this when 255 per position max (32 accumulators, 8 per page, 256/8=32 pages)
+                // only have to set 
+                a_accum = _mm256_set1_epi8(0); 
+                c_accum = _mm256_set1_epi8(0); 
+                g_accum = _mm256_set1_epi8(0); 
+                t_accum = _mm256_set1_epi8(0); 
 
-                    // search_info->cache_to_page[search_info->cache_clock] = page_index;
-                    // search_info->page_to_cache[page_index] = search_info->cache_clock;
-                    ++page_index;
-                    // search_info->cache_clock = (search_info->cache_clock + 1) % PAGE_CACHE_SIZE;
-                    // search_info->page_to_cache[search_info->cache_to_page[search_info->cache_clock]] = UNCACHED_PAGE;
-                    // rank_index = 0;
-                    // ++i;
-                    goto FINISHED_PAGE_LABEL;
-                }
-            // }
-            // ++rank_index;
-FINISHED_PAGE_LABEL:
-            (void)rank_index;
+                ++page_index;
+            }
+        }
+        for (;i < k; i += 1) {
+            // Clear out page ready to input symbols
+            const char c = in_buffer[i];
+            if (__glibc_unlikely(c == '\n')) search_info->ending_char_index = curr_index;
+            // Add to all CTable above char
+            // const unsigned char_val = get_char_index(c);
+            // Run count for rank table
+            ++tempRunCount[(unsigned)c];
+
+            ++curr_index;
+            // Snapshot rank table run counts
+            if (__glibc_unlikely(curr_index % PAGE_SIZE == 0)) {
+                // assert(page_index < PAGE_TABLE_SIZE);
+                search_info->rank_table[page_index].a_entry.val += tempRunCount[LANGUAGE[1]];
+                search_info->rank_table[page_index].b_entry.val += tempRunCount[LANGUAGE[2]];
+                search_info->rank_table[page_index].c_entry.val += tempRunCount[LANGUAGE[3]];
+                search_info->rank_table[page_index].d_entry.val += tempRunCount[LANGUAGE[4]];
+                tempRunCount[LANGUAGE[1]] = 0;
+                tempRunCount[LANGUAGE[2]] = 0;
+                tempRunCount[LANGUAGE[3]] = 0;
+                tempRunCount[LANGUAGE[4]] = 0;
+                ++page_index;
+            }
         }
     }
-    search_info->rank_table[page_index].a_entry.val = tempRunCount[LANGUAGE[1]];
-    search_info->rank_table[page_index].b_entry.val = tempRunCount[LANGUAGE[2]];
-    search_info->rank_table[page_index].c_entry.val = tempRunCount[LANGUAGE[3]];
-    search_info->rank_table[page_index].d_entry.val = tempRunCount[LANGUAGE[4]];
+#ifdef DEBUG
+    printf("accums: a=%d,c=%d,g=%d,t=%d\n",
+            mm256_hadd_epi8(a_accum),
+            mm256_hadd_epi8(c_accum),
+            mm256_hadd_epi8(g_accum),
+            mm256_hadd_epi8(t_accum));
+#endif
+    search_info->rank_table[page_index].a_entry.val += mm256_hadd_epi8(a_accum);
+    search_info->rank_table[page_index].b_entry.val += mm256_hadd_epi8(c_accum);
+    search_info->rank_table[page_index].c_entry.val += mm256_hadd_epi8(g_accum);
+    search_info->rank_table[page_index].d_entry.val += mm256_hadd_epi8(t_accum);
+    search_info->rank_table[page_index].a_entry.val += tempRunCount[LANGUAGE[1]];
+    search_info->rank_table[page_index].b_entry.val += tempRunCount[LANGUAGE[2]];
+    search_info->rank_table[page_index].c_entry.val += tempRunCount[LANGUAGE[3]];
+    search_info->rank_table[page_index].d_entry.val += tempRunCount[LANGUAGE[4]];
+    search_info->CTable[LANGUAGE[1]] = 1;
+    search_info->CTable[LANGUAGE[2]] = 
+        search_info->CTable[LANGUAGE[1]] + search_info->rank_table[page_index].a_entry.val;
+    search_info->CTable[LANGUAGE[3]] =
+        search_info->CTable[LANGUAGE[2]] + search_info->rank_table[page_index].b_entry.val;
+    search_info->CTable[LANGUAGE[4]] =
+        search_info->CTable[LANGUAGE[3]] + search_info->rank_table[page_index].c_entry.val;
+    search_info->CTable[LANGUAGE[5]] =
+        search_info->CTable[LANGUAGE[4]] + search_info->rank_table[page_index].d_entry.val;
 
     search_info->rank_table_size = curr_index;
 }
@@ -345,7 +419,7 @@ void read_search_queries(BWTSearch *search_info) {
 }
 
 void print_ctable(const BWTSearch *search_info) {
-    for (unsigned i = 0; i < LANGUAGE_SIZE; ++i) {
+    for (unsigned i = 0; i < LANGUAGE_SIZE+1; ++i) {
         printf("%c: %d\n", LANGUAGE[i], search_info->CTable[(unsigned)LANGUAGE[i]]);
     }
 }
@@ -376,6 +450,26 @@ void print_cumtable(const BWTSearch *search_info) {
 BWTSearch bwt_search = {.cache_clock = 0, .CTable ={0}};
 
 int main(int argc, char *argv[]) {
+    // Set constants
+    A_CHAR_MASK = _mm256_set1_epi8('A');
+    C_CHAR_MASK = _mm256_set1_epi8('C');
+    G_CHAR_MASK = _mm256_set1_epi8('G');
+    T_CHAR_MASK = _mm256_set1_epi8('T');
+    ONE_CHAR_MASK = _mm256_set1_epi8(1);
+    SHUFFLE_16_DOWN = _mm_setr_epi8(0, 1, 8, 9, 4, 5, 6, 7, 2, 3, 10, 11, 12, 13, 14, 15);
+#ifdef DEBUG
+    printf("%ld \n", sizeof(A_CHAR_MASK[0]));
+    printf("%c %c %c %c\n",
+        (char)(A_CHAR_MASK[0] & 0xFF), (char)(C_CHAR_MASK[0] & 0xFF), (char)(T_CHAR_MASK[0] & 0xFF), (char)(G_CHAR_MASK[0] & 0xFF));
+    __m256i debug_temp = _mm256_set1_epi8(1);
+    debug_temp = _mm256_cmpeq_epi8(A_CHAR_MASK, ONE_CHAR_MASK);
+    printf("cmpeq: %lld\n", debug_temp[0]);
+    debug_temp = _mm256_and_si256(A_CHAR_MASK, ONE_CHAR_MASK);
+    printf("and: %lld\n", debug_temp[0]);
+    debug_temp = _mm256_add_epi8(A_CHAR_MASK, ONE_CHAR_MASK);
+    printf("add: %lld\n", debug_temp[0]);
+#endif
+
     if (argc != 2) {
         printf("Usage: %s <BWT file path>\n", argv[0]);
     }
