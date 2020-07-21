@@ -135,13 +135,22 @@ static inline u_int32_t mm256_hadd_epi8(__m256i x) {
     const __m128i quad_sum_hi = _mm256_extracti128_si256(quad_sum_256i_64_grouped, 1);
     const __m128i quad_sum_lo = _mm256_extracti128_si256(quad_sum_256i_64_grouped, 0);
 
-    // const __m128i hi_pair = _mm_shuffle_epi8(quad_sum_hi, SHUFFLE_16_DOWN); // 2 * 16 bits
-    // const __m128i lo_pair = _mm_shuffle_epi8(quad_sum_lo, SHUFFLE_16_DOWN); // 2 * 16 bits
     const __m128i pair_sum = _mm_add_epi16(quad_sum_hi, quad_sum_lo); // 2 * 16 bits sum
 
     return _mm_extract_epi16(pair_sum, 0) + _mm_extract_epi16(pair_sum, 1); // TODO: use 64 bit int?
 }
 
+static inline u_int32_t mm256_hadd_epi8_2(__m256i x) {
+    const __m256i quad_sum_256i_64 = _mm256_sad_epu8(x, _mm256_setzero_si256()); // 4 * 16 bit ints in lows of 4 64 bit int
+    const __m128i quad_sum_hi = _mm256_extracti128_si256(quad_sum_256i_64, 1);
+    const __m128i quad_sum_lo = _mm256_extracti128_si256(quad_sum_256i_64, 0);
+
+    const __m128i hi_pair = _mm_shuffle_epi8(quad_sum_hi, SHUFFLE_16_DOWN); // 2 * 16 bits
+    const __m128i lo_pair = _mm_shuffle_epi8(quad_sum_lo, SHUFFLE_16_DOWN); // 2 * 16 bits
+    const __m128i pair_sum = _mm_add_epi16(hi_pair, lo_pair); // 2 * 16 bits sum
+
+    return _mm_extract_epi16(pair_sum, 0) + _mm_extract_epi16(pair_sum, 1); // TODO: use 64 bit int?
+}
 
 
 void prepare_bwt_search(BWTSearch *search_info) {
@@ -212,13 +221,13 @@ void prepare_bwt_search(BWTSearch *search_info) {
                     do {
                         temp_256i_buf = _mm256_cmpeq_epi8(temp_256i_buf, ENDING_CHAR_MASK);
                         for (unsigned buffer_int_index = 0; buffer_int_index < 4; ++buffer_int_index) {
-                            u_int64_t end_char_index = _lzcnt_u64(temp_256i_buf[buffer_int_index]);
-                            if (end_char_index != 64) {
+                            u_int64_t end_char_bit_offset = _lzcnt_u64(temp_256i_buf[buffer_int_index]);
+                            if (end_char_bit_offset != 64) {
                                 search_info->ending_char_index =
-                                    curr_index - (backward_iter+1) * CHAR_COUNT_STEP + buffer_int_index * 8 + (8 - (end_char_index/8 + 1));
+                                    curr_index - (backward_iter+1) * CHAR_COUNT_STEP + buffer_int_index * 8 + (8 - (end_char_bit_offset/8 + 1));
                                 end_char_found = TRUE;
-                                printf("end_char_index %ld %d\n",
-                                    end_char_index, search_info->ending_char_index);
+                                printf("end_char_bit_offset %ld %d\n",
+                                    end_char_bit_offset, search_info->ending_char_index);
                             }
                         }
                         ++backward_iter;
@@ -306,17 +315,15 @@ void prepare_bwt_search(BWTSearch *search_info) {
     search_info->rank_table[page_index].d_entry.val += tempRunCount[LANGUAGE[4]];
     if (__glibc_unlikely(!end_char_found)) {
         // Find ending char
-        int backward_iter = i - 1;
-        do {
+        for (int backward_iter = i - 1; backward_iter >= 0; --backward_iter) {
             if (in_buffer[backward_iter] == ENDING_CHAR) {
                 search_info->ending_char_index = curr_index - backward_iter;
                 break;
             }
-            --backward_iter;
-        } while (backward_iter >= 0);
+        }
     }
 
-    
+
     search_info->CTable[LANGUAGE[1]] = 1;
     search_info->CTable[LANGUAGE[2]] = 
         search_info->CTable[LANGUAGE[1]] + search_info->rank_table[page_index].a_entry.val;
