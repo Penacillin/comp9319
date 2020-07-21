@@ -1,11 +1,11 @@
 CXX=gcc
-CFLAGS=-Wextra -Wall -Werror --std=c11 -march=native
+CFLAGS=-Wextra -Wall -Werror --std=c11 -march=core-avx2
 LDFLAGS=-lrt
 
 default: CFLAGS += -O3
 default: executables
 
-debug: CFLAGS += -DDEBUG -g
+debug: CFLAGS += -DDEBUG -DPERF -g
 debug: executables 
 
 perf: CFLAGS += -O3 -g -pg -DPERF
