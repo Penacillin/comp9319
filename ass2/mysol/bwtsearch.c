@@ -29,6 +29,9 @@ const unsigned LANGUAGE[] = {'\n', 'A', 'C', 'G', 'T', 'U'};
 #define PAGE_CACHE_SIZE 128
 #define RANK_TABLE_SIZE (MAX_INPUT_SIZE/PAGE_SIZE)
 
+#define FALSE 0
+#define TRUE 1
+
 typedef struct _PageEntry {
     char symbol_array[PAGE_SIZE/SYMBOLS_PER_CHAR];
 } PageEntry;
@@ -121,17 +124,20 @@ __m256i A_CHAR_MASK;
 __m256i C_CHAR_MASK;
 __m256i G_CHAR_MASK;
 __m256i T_CHAR_MASK;
+__m256i ENDING_CHAR_MASK;
 __m256i ONE_CHAR_MASK;
 __m128i SHUFFLE_16_DOWN;
+__m256i SHUFFLE_16_DOWN_256;
 
 static inline u_int32_t mm256_hadd_epi8(__m256i x) {
     const __m256i quad_sum_256i_64 = _mm256_sad_epu8(x, _mm256_setzero_si256()); // 4 * 16 bit ints in lows of 4 64 bit int
-    const __m128i quad_sum_hi = _mm256_extracti128_si256(quad_sum_256i_64, 1);
-    const __m128i quad_sum_lo = _mm256_extracti128_si256(quad_sum_256i_64, 0);
+    const __m256i quad_sum_256i_64_grouped = _mm256_shuffle_epi8(quad_sum_256i_64, SHUFFLE_16_DOWN_256);
+    const __m128i quad_sum_hi = _mm256_extracti128_si256(quad_sum_256i_64_grouped, 1);
+    const __m128i quad_sum_lo = _mm256_extracti128_si256(quad_sum_256i_64_grouped, 0);
 
-    const __m128i hi_pair = _mm_shuffle_epi8(quad_sum_hi, SHUFFLE_16_DOWN); // 2 * 16 bits
-    const __m128i lo_pair = _mm_shuffle_epi8(quad_sum_lo, SHUFFLE_16_DOWN); // 2 * 16 bits
-    const __m128i pair_sum = _mm_add_epi16(hi_pair, lo_pair); // 2 * 16 bits sum
+    // const __m128i hi_pair = _mm_shuffle_epi8(quad_sum_hi, SHUFFLE_16_DOWN); // 2 * 16 bits
+    // const __m128i lo_pair = _mm_shuffle_epi8(quad_sum_lo, SHUFFLE_16_DOWN); // 2 * 16 bits
+    const __m128i pair_sum = _mm_add_epi16(quad_sum_hi, quad_sum_lo); // 2 * 16 bits sum
 
     return _mm_extract_epi16(pair_sum, 0) + _mm_extract_epi16(pair_sum, 1); // TODO: use 64 bit int?
 }
@@ -143,10 +149,11 @@ void prepare_bwt_search(BWTSearch *search_info) {
     unsigned curr_index = 0;
     unsigned page_index = 0;
     unsigned tempRunCount[128] = {0};
+    char end_char_found = FALSE;
     char __attribute__((aligned (32))) in_buffer[INPUT_BUF_SIZE];
 
 // #ifdef DEBUG
-    memset(search_info->page_to_cache, 255, sizeof(search_info->page_to_cache));
+    memset(search_info->page_to_cache, UNCACHED_PAGE, sizeof(search_info->page_to_cache));
 // #endif
 
     // First snapshot starting state
@@ -162,44 +169,74 @@ void prepare_bwt_search(BWTSearch *search_info) {
     __m256i t_accum = _mm256_set1_epi8(0); 
     __m256i temp_256i_buf;
 
+    ssize_t i = 0;
     while(__glibc_likely((k = read(search_info->bwt_file_fd, in_buffer, INPUT_BUF_SIZE)) > 0)) {
-        ssize_t i = 0;
-        for (; i < k - CHAR_COUNT_STEP; i += CHAR_COUNT_STEP) {
-            // Clear out page ready to input symbols
-            const char c = in_buffer[i];
-            if (__glibc_unlikely(c == '\n')) search_info->ending_char_index = curr_index;
-            // Add to all CTable above char
-            // const unsigned char_val = get_char_index(c);
-
-            temp_256i_buf = _mm256_load_si256((const __m256i*)in_buffer + i);
-            a_accum = _mm256_add_epi8(_mm256_and_si256(_mm256_cmpeq_epi8(temp_256i_buf, A_CHAR_MASK), ONE_CHAR_MASK), a_accum);
-            c_accum = _mm256_add_epi8(_mm256_and_si256(_mm256_cmpeq_epi8(temp_256i_buf, C_CHAR_MASK), ONE_CHAR_MASK), c_accum);
-            g_accum = _mm256_add_epi8(_mm256_and_si256(_mm256_cmpeq_epi8(temp_256i_buf, G_CHAR_MASK), ONE_CHAR_MASK), g_accum);
-            t_accum = _mm256_add_epi8(_mm256_and_si256(_mm256_cmpeq_epi8(temp_256i_buf, T_CHAR_MASK), ONE_CHAR_MASK), t_accum);
-
+#ifdef DEBUG
+        fprintf(stderr, "Read %ld bytes\n", k);
+#endif
+        for (; i < k - CHAR_COUNT_STEP + 1; i += CHAR_COUNT_STEP) {
+            temp_256i_buf = _mm256_stream_load_si256((const __m256i*)(in_buffer + i));
+            a_accum = _mm256_sub_epi8(a_accum, _mm256_cmpeq_epi8(temp_256i_buf, A_CHAR_MASK));
+            c_accum = _mm256_sub_epi8(c_accum, _mm256_cmpeq_epi8(temp_256i_buf, C_CHAR_MASK));
+            g_accum = _mm256_sub_epi8(g_accum, _mm256_cmpeq_epi8(temp_256i_buf, G_CHAR_MASK));
+            t_accum = _mm256_sub_epi8(t_accum, _mm256_cmpeq_epi8(temp_256i_buf, T_CHAR_MASK));
+            // _pext_u64
             curr_index += CHAR_COUNT_STEP;
             // Snapshot rank table run counts
             if (__glibc_unlikely(curr_index % PAGE_SIZE == 0)) {
 #ifdef DEBUG
                 assert(page_index < RANK_TABLE_SIZE);
 #endif
+                u_int32_t a_accum_sum = mm256_hadd_epi8(a_accum);
+                u_int32_t c_accum_sum = mm256_hadd_epi8(c_accum);
+                u_int32_t g_accum_sum = mm256_hadd_epi8(g_accum);
+                u_int32_t t_accum_sum = mm256_hadd_epi8(t_accum);
+
                 search_info->rank_table[page_index].a_entry.val =
-                    search_info->rank_table[page_index-1].a_entry.val + mm256_hadd_epi8(a_accum);
+                    search_info->rank_table[page_index-1].a_entry.val + a_accum_sum;
                 search_info->rank_table[page_index].b_entry.val =
-                    search_info->rank_table[page_index-1].b_entry.val + mm256_hadd_epi8(c_accum);
+                    search_info->rank_table[page_index-1].b_entry.val + c_accum_sum;
                 search_info->rank_table[page_index].c_entry.val =
-                    search_info->rank_table[page_index-1].c_entry.val + mm256_hadd_epi8(g_accum);
+                    search_info->rank_table[page_index-1].c_entry.val + g_accum_sum;
                 search_info->rank_table[page_index].d_entry.val =
-                    search_info->rank_table[page_index-1].d_entry.val + mm256_hadd_epi8(t_accum);
+                    search_info->rank_table[page_index-1].d_entry.val + t_accum_sum;
+
+                if (__glibc_unlikely(!end_char_found && a_accum_sum + c_accum_sum + g_accum_sum + t_accum_sum !=
+                                      PAGE_SIZE)) {
 #ifdef DEBUG
-                printf("accums: a=%d,c=%d,g=%d,t=%d\n",
-                    mm256_hadd_epi8(a_accum),
-                    mm256_hadd_epi8(c_accum),
-                    mm256_hadd_epi8(g_accum),
-                    mm256_hadd_epi8(t_accum));
+                    fprintf(stderr, "Found endchar around %u %d\n", curr_index,
+                        a_accum_sum + c_accum_sum + g_accum_sum + t_accum_sum);
+#endif
+                    // Find ending char
+                    unsigned backward_iter = 0;
+                    do {
+                        temp_256i_buf = _mm256_cmpeq_epi8(temp_256i_buf, ENDING_CHAR_MASK);
+                        for (unsigned buffer_int_index = 0; buffer_int_index < 4; ++buffer_int_index) {
+                            u_int64_t end_char_index = _lzcnt_u64(temp_256i_buf[buffer_int_index]);
+                            if (end_char_index != 64) {
+                                search_info->ending_char_index =
+                                    curr_index - (backward_iter+1) * CHAR_COUNT_STEP + buffer_int_index * 8 + (8 - (end_char_index/8 + 1));
+                                end_char_found = TRUE;
+                                printf("end_char_index %ld %d\n",
+                                    end_char_index, search_info->ending_char_index);
+                            }
+                        }
+                        ++backward_iter;
+                        if (backward_iter != PAGE_SIZE/CHAR_COUNT_STEP)
+                            temp_256i_buf = _mm256_load_si256(
+                                (const __m256i*)(in_buffer + i - backward_iter * CHAR_COUNT_STEP));
+                    } while (backward_iter < PAGE_SIZE/CHAR_COUNT_STEP);
+                }
+#ifdef DEBUG
+                // printf("accums (%d): a=%d,c=%d,g=%d,t=%d\n",
+                //     curr_index,
+                //     mm256_hadd_epi8(a_accum),
+                //     mm256_hadd_epi8(c_accum),
+                //     mm256_hadd_epi8(g_accum),
+                //     mm256_hadd_epi8(t_accum));
 #endif
                 // TODO: only need to do this when 255 per position max (32 accumulators, 8 per page, 256/8=32 pages)
-                // only have to set 
+                // only have to set every 32 pages
                 a_accum = _mm256_set1_epi8(0); 
                 c_accum = _mm256_set1_epi8(0); 
                 g_accum = _mm256_set1_epi8(0); 
@@ -211,7 +248,13 @@ void prepare_bwt_search(BWTSearch *search_info) {
         for (;i < k; i += 1) {
             // Clear out page ready to input symbols
             const char c = in_buffer[i];
-            if (__glibc_unlikely(c == '\n')) search_info->ending_char_index = curr_index;
+            if (__glibc_unlikely(c == '\n'))  {
+#ifdef DEBUG
+                fprintf(stderr, "Found end char in linear search %d %ld\n", curr_index, i);
+#endif
+                search_info->ending_char_index = curr_index;
+                end_char_found = TRUE;
+            }
             // Add to all CTable above char
             // const unsigned char_val = get_char_index(c);
             // Run count for rank table
@@ -221,10 +264,14 @@ void prepare_bwt_search(BWTSearch *search_info) {
             // Snapshot rank table run counts
             if (__glibc_unlikely(curr_index % PAGE_SIZE == 0)) {
                 // assert(page_index < PAGE_TABLE_SIZE);
-                search_info->rank_table[page_index].a_entry.val += tempRunCount[LANGUAGE[1]];
-                search_info->rank_table[page_index].b_entry.val += tempRunCount[LANGUAGE[2]];
-                search_info->rank_table[page_index].c_entry.val += tempRunCount[LANGUAGE[3]];
-                search_info->rank_table[page_index].d_entry.val += tempRunCount[LANGUAGE[4]];
+                search_info->rank_table[page_index].a_entry.val = 
+                    search_info->rank_table[page_index - 1].a_entry.val + tempRunCount[LANGUAGE[1]];
+                search_info->rank_table[page_index].b_entry.val = 
+                    search_info->rank_table[page_index - 1].b_entry.val + tempRunCount[LANGUAGE[2]];
+                search_info->rank_table[page_index].c_entry.val = 
+                    search_info->rank_table[page_index - 1].c_entry.val + tempRunCount[LANGUAGE[3]];
+                search_info->rank_table[page_index].d_entry.val = 
+                    search_info->rank_table[page_index - 1].d_entry.val + tempRunCount[LANGUAGE[4]];
                 tempRunCount[LANGUAGE[1]] = 0;
                 tempRunCount[LANGUAGE[2]] = 0;
                 tempRunCount[LANGUAGE[3]] = 0;
@@ -232,6 +279,7 @@ void prepare_bwt_search(BWTSearch *search_info) {
                 ++page_index;
             }
         }
+        i = 0;
     }
 #ifdef DEBUG
     printf("accums: a=%d,c=%d,g=%d,t=%d\n",
@@ -240,14 +288,35 @@ void prepare_bwt_search(BWTSearch *search_info) {
             mm256_hadd_epi8(g_accum),
             mm256_hadd_epi8(t_accum));
 #endif
-    search_info->rank_table[page_index].a_entry.val += mm256_hadd_epi8(a_accum);
-    search_info->rank_table[page_index].b_entry.val += mm256_hadd_epi8(c_accum);
-    search_info->rank_table[page_index].c_entry.val += mm256_hadd_epi8(g_accum);
-    search_info->rank_table[page_index].d_entry.val += mm256_hadd_epi8(t_accum);
+    u_int32_t a_accum_sum = mm256_hadd_epi8(a_accum);
+    u_int32_t c_accum_sum = mm256_hadd_epi8(c_accum);
+    u_int32_t g_accum_sum = mm256_hadd_epi8(g_accum);
+    u_int32_t t_accum_sum = mm256_hadd_epi8(t_accum);
+    search_info->rank_table[page_index].a_entry.val =
+        search_info->rank_table[page_index - 1].a_entry.val + a_accum_sum;
+    search_info->rank_table[page_index].b_entry.val =
+        search_info->rank_table[page_index - 1].b_entry.val + c_accum_sum;
+    search_info->rank_table[page_index].c_entry.val =
+        search_info->rank_table[page_index - 1].c_entry.val + g_accum_sum;
+    search_info->rank_table[page_index].d_entry.val =
+        search_info->rank_table[page_index - 1].d_entry.val + t_accum_sum;
     search_info->rank_table[page_index].a_entry.val += tempRunCount[LANGUAGE[1]];
     search_info->rank_table[page_index].b_entry.val += tempRunCount[LANGUAGE[2]];
     search_info->rank_table[page_index].c_entry.val += tempRunCount[LANGUAGE[3]];
     search_info->rank_table[page_index].d_entry.val += tempRunCount[LANGUAGE[4]];
+    if (__glibc_unlikely(!end_char_found)) {
+        // Find ending char
+        int backward_iter = i - 1;
+        do {
+            if (in_buffer[backward_iter] == ENDING_CHAR) {
+                search_info->ending_char_index = curr_index - backward_iter;
+                break;
+            }
+            --backward_iter;
+        } while (backward_iter >= 0);
+    }
+
+    
     search_info->CTable[LANGUAGE[1]] = 1;
     search_info->CTable[LANGUAGE[2]] = 
         search_info->CTable[LANGUAGE[1]] + search_info->rank_table[page_index].a_entry.val;
@@ -455,8 +524,11 @@ int main(int argc, char *argv[]) {
     C_CHAR_MASK = _mm256_set1_epi8('C');
     G_CHAR_MASK = _mm256_set1_epi8('G');
     T_CHAR_MASK = _mm256_set1_epi8('T');
+    ENDING_CHAR_MASK = _mm256_set1_epi8(ENDING_CHAR);
     ONE_CHAR_MASK = _mm256_set1_epi8(1);
     SHUFFLE_16_DOWN = _mm_setr_epi8(0, 1, 8, 9, 4, 5, 6, 7, 2, 3, 10, 11, 12, 13, 14, 15);
+    SHUFFLE_16_DOWN_256 = _mm256_setr_epi8(0, 1, 8, 9, 4, 5, 6, 7, 2, 3, 10, 11, 12, 13, 14, 15,
+                                            0, 1, 8, 9, 4, 5, 6, 7, 2, 3, 10, 11, 12, 13, 14, 15);
 #ifdef DEBUG
     printf("%ld \n", sizeof(A_CHAR_MASK[0]));
     printf("%c %c %c %c\n",
@@ -486,7 +558,7 @@ int main(int argc, char *argv[]) {
 #ifdef DEBUG
     fprintf(stderr, "RankEntry size %ld\n", sizeof(RankEntry));
     print_ctable(&bwt_search);
-    print_rank_table(&bwt_search);
+    // print_rank_table(&bwt_search);
     print_cumtable(&bwt_search);
 #endif
 
