@@ -156,6 +156,7 @@ static inline u_int32_t mm256_hadd_epi8_2(__m256i x) {
 void prepare_bwt_search(BWTSearch *search_info) {
     ssize_t k;
     unsigned curr_index = 0;
+    unsigned acc_base_page = 0;
     unsigned page_index = 0;
     unsigned tempRunCount[128] = {0};
     char end_char_found = FALSE;
@@ -203,19 +204,22 @@ void prepare_bwt_search(BWTSearch *search_info) {
                 u_int32_t t_accum_sum = mm256_hadd_epi8(t_accum);
 
                 search_info->rank_table[page_index].a_entry.val =
-                    search_info->rank_table[page_index-1].a_entry.val + a_accum_sum;
+                    search_info->rank_table[acc_base_page].a_entry.val + a_accum_sum;
                 search_info->rank_table[page_index].b_entry.val =
-                    search_info->rank_table[page_index-1].b_entry.val + c_accum_sum;
+                    search_info->rank_table[acc_base_page].b_entry.val + c_accum_sum;
                 search_info->rank_table[page_index].c_entry.val =
-                    search_info->rank_table[page_index-1].c_entry.val + g_accum_sum;
+                    search_info->rank_table[acc_base_page].c_entry.val + g_accum_sum;
                 search_info->rank_table[page_index].d_entry.val =
-                    search_info->rank_table[page_index-1].d_entry.val + t_accum_sum;
+                    search_info->rank_table[acc_base_page].d_entry.val + t_accum_sum;
 
                 if (__glibc_unlikely(!end_char_found && a_accum_sum + c_accum_sum + g_accum_sum + t_accum_sum !=
-                                      PAGE_SIZE)) {
+                                      (page_index - acc_base_page) * PAGE_SIZE)) {
 #ifdef DEBUG
                     fprintf(stderr, "Found endchar around %u %d\n", curr_index,
                         a_accum_sum + c_accum_sum + g_accum_sum + t_accum_sum);
+#endif
+#ifdef PERF
+                    clock_t t = clock();
 #endif
                     // Find ending char
                     unsigned backward_iter = 0;
@@ -234,6 +238,9 @@ void prepare_bwt_search(BWTSearch *search_info) {
                             temp_256i_buf = _mm256_load_si256(
                                 (const __m256i*)(in_buffer + i - backward_iter * CHAR_COUNT_STEP));
                     } while (backward_iter < PAGE_SIZE/CHAR_COUNT_STEP);
+#ifdef PERF
+                    fprintf(stderr, "find end char took %f seconds to execute \n", ((double)clock() - t)/CLOCKS_PER_SEC);
+#endif
                 }
 #ifdef DEBUG
                 // printf("accums (%d): a=%d,c=%d,g=%d,t=%d\n",
@@ -245,10 +252,13 @@ void prepare_bwt_search(BWTSearch *search_info) {
 #endif
                 // TODO: only need to do this when 255 per position max (32 accumulators, 8 per page, 256/8=32 pages)
                 // only have to set every 32 pages
-                a_accum = _mm256_set1_epi8(0); 
-                c_accum = _mm256_set1_epi8(0); 
-                g_accum = _mm256_set1_epi8(0); 
-                t_accum = _mm256_set1_epi8(0); 
+                if (page_index > acc_base_page + 7) {
+                    a_accum = _mm256_set1_epi8(0); 
+                    c_accum = _mm256_set1_epi8(0); 
+                    g_accum = _mm256_set1_epi8(0); 
+                    t_accum = _mm256_set1_epi8(0);
+                    acc_base_page = page_index;
+                }
 
                 ++page_index;
             }
@@ -273,13 +283,13 @@ void prepare_bwt_search(BWTSearch *search_info) {
             if (__glibc_unlikely(curr_index % PAGE_SIZE == 0)) {
                 // assert(page_index < PAGE_TABLE_SIZE);
                 search_info->rank_table[page_index].a_entry.val = 
-                    search_info->rank_table[page_index - 1].a_entry.val + tempRunCount[LANGUAGE[1]];
+                    search_info->rank_table[acc_base_page].a_entry.val + tempRunCount[LANGUAGE[1]];
                 search_info->rank_table[page_index].b_entry.val = 
-                    search_info->rank_table[page_index - 1].b_entry.val + tempRunCount[LANGUAGE[2]];
+                    search_info->rank_table[acc_base_page].b_entry.val + tempRunCount[LANGUAGE[2]];
                 search_info->rank_table[page_index].c_entry.val = 
-                    search_info->rank_table[page_index - 1].c_entry.val + tempRunCount[LANGUAGE[3]];
+                    search_info->rank_table[acc_base_page].c_entry.val + tempRunCount[LANGUAGE[3]];
                 search_info->rank_table[page_index].d_entry.val = 
-                    search_info->rank_table[page_index - 1].d_entry.val + tempRunCount[LANGUAGE[4]];
+                    search_info->rank_table[acc_base_page].d_entry.val + tempRunCount[LANGUAGE[4]];
                 tempRunCount[LANGUAGE[1]] = 0;
                 tempRunCount[LANGUAGE[2]] = 0;
                 tempRunCount[LANGUAGE[3]] = 0;
@@ -300,13 +310,13 @@ void prepare_bwt_search(BWTSearch *search_info) {
     u_int32_t g_accum_sum = mm256_hadd_epi8(g_accum);
     u_int32_t t_accum_sum = mm256_hadd_epi8(t_accum);
     search_info->rank_table[page_index].a_entry.val =
-        search_info->rank_table[page_index - 1].a_entry.val + a_accum_sum;
+        search_info->rank_table[acc_base_page].a_entry.val + a_accum_sum;
     search_info->rank_table[page_index].b_entry.val =
-        search_info->rank_table[page_index - 1].b_entry.val + c_accum_sum;
+        search_info->rank_table[acc_base_page].b_entry.val + c_accum_sum;
     search_info->rank_table[page_index].c_entry.val =
-        search_info->rank_table[page_index - 1].c_entry.val + g_accum_sum;
+        search_info->rank_table[acc_base_page].c_entry.val + g_accum_sum;
     search_info->rank_table[page_index].d_entry.val =
-        search_info->rank_table[page_index - 1].d_entry.val + t_accum_sum;
+        search_info->rank_table[acc_base_page].d_entry.val + t_accum_sum;
     search_info->rank_table[page_index].a_entry.val += tempRunCount[LANGUAGE[1]];
     search_info->rank_table[page_index].b_entry.val += tempRunCount[LANGUAGE[2]];
     search_info->rank_table[page_index].c_entry.val += tempRunCount[LANGUAGE[3]];

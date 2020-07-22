@@ -7,7 +7,10 @@ for file in ./data/*.bwt
 do
     file_basename=$(basename -- $file)
     echo $file
-    ./$REFERENCE_SOLUTION $file < ./inputs/dna-tiny.input > ./outputs/$file_basename.output.ref
-    ./$MY_SOL $file < ./inputs/dna-tiny.input > ./outputs/$file_basename.output
-    diff ./outputs/$file_basename.output.ref ./outputs/$file_basename.output | wc
+    time ./$REFERENCE_SOLUTION $file < ./inputs/dna-tiny.input > ./outputs/$file_basename.output.ref
+    time ./$MY_SOL $file < ./inputs/dna-tiny.input > ./outputs/$file_basename.output
+    res=$(diff ./outputs/$file_basename.output.ref ./outputs/$file_basename.output)
+    if [[ $res != "" ]]; then
+        echo "MISMAATCH"
+    fi
 done
