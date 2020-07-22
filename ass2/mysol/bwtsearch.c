@@ -180,6 +180,7 @@ void prepare_bwt_search(BWTSearch *search_info) {
 
     ssize_t i = 0;
     while(__glibc_likely((k = read(search_info->bwt_file_fd, in_buffer, INPUT_BUF_SIZE)) > 0)) {
+        i = 0;
 #ifdef DEBUG
         fprintf(stderr, "Read %ld bytes\n", k);
 #endif
@@ -226,8 +227,6 @@ void prepare_bwt_search(BWTSearch *search_info) {
                                 search_info->ending_char_index =
                                     curr_index - (backward_iter+1) * CHAR_COUNT_STEP + buffer_int_index * 8 + (8 - (end_char_bit_offset/8 + 1));
                                 end_char_found = TRUE;
-                                printf("end_char_bit_offset %ld %d\n",
-                                    end_char_bit_offset, search_info->ending_char_index);
                             }
                         }
                         ++backward_iter;
@@ -288,7 +287,6 @@ void prepare_bwt_search(BWTSearch *search_info) {
                 ++page_index;
             }
         }
-        i = 0;
     }
 #ifdef DEBUG
     printf("accums: a=%d,c=%d,g=%d,t=%d\n",
@@ -317,12 +315,17 @@ void prepare_bwt_search(BWTSearch *search_info) {
         // Find ending char
         for (int backward_iter = i - 1; backward_iter >= 0; --backward_iter) {
             if (in_buffer[backward_iter] == ENDING_CHAR) {
-                search_info->ending_char_index = curr_index - backward_iter;
+                search_info->ending_char_index = curr_index - (i - backward_iter);
+#ifdef DEBUG
+                fprintf(stderr, "Found ending char index in remainder %d\n", backward_iter);
+#endif
                 break;
             }
         }
     }
-
+#ifdef DEBUG
+    fprintf(stderr, "ending_char_index %d %d\n", end_char_found, search_info->ending_char_index);
+#endif
 
     search_info->CTable[LANGUAGE[1]] = 1;
     search_info->CTable[LANGUAGE[2]] = 
