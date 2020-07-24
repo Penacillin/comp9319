@@ -38,30 +38,33 @@ typedef struct _PageEntry {
 
 #define RUN_COUNT_LOWER_MASK 0x00FFFFFF
 typedef union _RankEntry {
-    struct __attribute__((__packed__)) _A_entry {
-        u_int32_t val;
-        u_int32_t x[3];
-    } a_entry;
-    struct __attribute__((__packed__)) _B_entry {
-        u_int32_t _x[1];
-        u_int32_t val;
-        u_int32_t _y[2];
-    } b_entry;
-    struct __attribute__((__packed__)) _C_entry {
-        u_int32_t _x[2];
-        u_int32_t val;
-        u_int32_t _y[1];
-    } c_entry;
-    struct __attribute__((__packed__)) _D_entry {
-        u_int32_t _x[3];
-        u_int32_t val;
-    } d_entry;
+    union Entries {
+        struct __attribute__((__packed__)) _A_entry {
+            u_int32_t val;
+            u_int32_t x[3];
+        } a_entry;
+        struct __attribute__((__packed__)) _B_entry {
+            u_int32_t _x[1];
+            u_int32_t val;
+            u_int32_t _y[2];
+        } b_entry;
+        struct __attribute__((__packed__)) _C_entry {
+            u_int32_t _x[2];
+            u_int32_t val;
+            u_int32_t _y[1];
+        } c_entry;
+        struct __attribute__((__packed__)) _D_entry {
+            u_int32_t _x[3];
+            u_int32_t val;
+        } d_entry;
+    } entries;
+    __m128i int_vector;
 } RankEntry;
 
 
 typedef struct _BWTSearch {
     u_int32_t rank_table_size;
-    RankEntry rank_table[RANK_TABLE_SIZE+1];
+    RankEntry __attribute__((aligned (16)))  rank_table[RANK_TABLE_SIZE+1];
     PageEntry symbol_pages[PAGE_CACHE_SIZE];
 
     u_int32_t ending_char_index;
@@ -128,6 +131,7 @@ __m256i ENDING_CHAR_MASK;
 __m256i ONE_CHAR_MASK;
 __m128i SHUFFLE_16_DOWN;
 __m256i SHUFFLE_16_DOWN_256;
+__m128i SHUFFLE_2x2x16_4x16;
 
 static inline u_int32_t mm256_hadd_epi8(__m256i x) {
     const __m256i quad_sum_256i_64 = _mm256_sad_epu8(x, _mm256_setzero_si256()); // 4 * 16 bit ints in lows of 4 64 bit int
@@ -152,6 +156,43 @@ static inline u_int32_t mm256_hadd_epi8_2(__m256i x) {
     return _mm_extract_epi16(pair_sum, 0) + _mm_extract_epi16(pair_sum, 1); // TODO: use 64 bit int?
 }
 
+static inline __m256i mm256_hadd_epi8_4(__m256i a, __m256i b, __m256i c, __m256i d) {
+    const __m256i a_quad_sum256i = _mm256_sad_epu8(a, _mm256_setzero_si256()); // ---A4---A3---A2---A1
+    const __m256i b_quad_sum256i = _mm256_sad_epu8(b, _mm256_setzero_si256()); // ---B4---B3---B2---B1
+    const __m256i c_quad_sum256i = _mm256_slli_epi64(_mm256_sad_epu8(c, _mm256_setzero_si256()), 16); // --C4---C3---C2---C1-
+    const __m256i d_quad_sum256i = _mm256_slli_epi64(_mm256_sad_epu8(d, _mm256_setzero_si256()), 16); // --D4---D3---D2---D1-
+
+    __m256i ab_lo = _mm256_permute2x128_si256(a_quad_sum256i, b_quad_sum256i, 0x02); // ---B2---B1---A2---A1
+    __m256i ab_hi = _mm256_permute2x128_si256(a_quad_sum256i, b_quad_sum256i, 0x13); // ---B4---B3---A4---A3
+    ab_lo = _mm256_or_si256(_mm256_permute2x128_si256(c_quad_sum256i, d_quad_sum256i, 0x02), ab_lo); // --D2B2--D1B1--C2A2--C1A1
+    ab_hi = _mm256_or_si256(_mm256_permute2x128_si256(c_quad_sum256i, d_quad_sum256i, 0x13), ab_hi); // --D4B4--D3B3--C4A4--C3A3
+
+    __m256i quad_sum = _mm256_add_epi16(ab_lo, ab_hi); // (-,-,D2+D4,B2+B4, -,-,D1+D3,B1+B3, -,-,C2+C4,A2+A4, -,-,C1+C3,A1+A3)
+    ab_hi = _mm256_permute4x64_epi64(quad_sum, 0b11110101); // -,-,D2+D4,B2+B4, -,-,D2+D4,B2+B4, -,-,C2+C4,A2+A4, -,-,C2+C4,A2+A4)
+    quad_sum = _mm256_add_epi16(quad_sum, ab_hi); //-,-,2*(D2+D4),2*(B2+B4), -,-,D1+D3+D2+D4,B1+B3+B2+B4, -,-,2*(C2+C4),2*(A2+A4), -,-,C1+C3+C2+C4,A1+A3+A2+A4)
+    return quad_sum;
+}
+
+static inline __m128i mm256_hadd_epi8_4_128(__m256i a, __m256i b, __m256i c, __m256i d) {
+    const __m256i a_quad_sum256i = _mm256_sad_epu8(a, _mm256_setzero_si256()); // ---A4---A3---A2---A1
+    const __m256i b_quad_sum256i = _mm256_sad_epu8(b, _mm256_setzero_si256()); // ---B4---B3---B2---B1
+    const __m256i c_quad_sum256i = _mm256_slli_epi64(_mm256_sad_epu8(c, _mm256_setzero_si256()), 16); // --C4---C3---C2---C1-
+    const __m256i d_quad_sum256i = _mm256_slli_epi64(_mm256_sad_epu8(d, _mm256_setzero_si256()), 16); // --D4---D3---D2---D1-
+
+    __m256i ab_lo = _mm256_permute2x128_si256(a_quad_sum256i, b_quad_sum256i, 0x02); // ---B2---B1---A2---A1
+    __m256i ab_hi = _mm256_permute2x128_si256(a_quad_sum256i, b_quad_sum256i, 0x13); // ---B4---B3---A4---A3
+    ab_lo = _mm256_or_si256(_mm256_permute2x128_si256(c_quad_sum256i, d_quad_sum256i, 0x02), ab_lo); // --D2B2--D1B1--C2A2--C1A1
+    ab_hi = _mm256_or_si256(_mm256_permute2x128_si256(c_quad_sum256i, d_quad_sum256i, 0x13), ab_hi); // --D4B4--D3B3--C4A4--C3A3
+
+    __m256i quad_sum = _mm256_add_epi16(ab_lo, ab_hi); // (-,-,D2+D4,B2+B4, -,-,D1+D3,B1+B3, -,-,C2+C4,A2+A4, -,-,C1+C3,A1+A3)
+    ab_hi = _mm256_permute4x64_epi64(quad_sum, 0b11110101); // -,-,D2+D4,B2+B4, -,-,D2+D4,B2+B4, -,-,C2+C4,A2+A4, -,-,C2+C4,A2+A4)
+    quad_sum = _mm256_add_epi16(quad_sum, ab_hi); //-,-,2*(D2+D4),2*(B2+B4), -,-,D1+D3+D2+D4,B1+B3+B2+B4, -,-,2*(C2+C4),2*(A2+A4), -,-,C1+C3+C2+C4,A1+A3+A2+A4)
+    quad_sum[1] = quad_sum[2]; //-,-,2*(D2+D4),2*(B2+B4), -,-,D1+D3+D2+D4,B1+B3+B2+B4, -,-,D1+D3+D2+D4,B1+B3+B2+B4, -,-,C1+C3+C2+C4,A1+A3+A2+A4)
+    __m128i quad_sum_128 = _mm256_castsi256_si128(quad_sum); // -,-,D1+D3+D2+D4,B1+B3+B2+B4, -,-,C1+C3+C2+C4,A1+A3+A2+A4
+    quad_sum_128 = _mm_shuffle_epi8 (quad_sum_128, SHUFFLE_2x2x16_4x16); // -,D1+D3+D2+D4,-,B1+B3+B2+B4, -,C1+C3+C2+C4,-,A1+A3+A2+A4
+    return quad_sum_128;
+}
+
 
 void prepare_bwt_search(BWTSearch *search_info) {
     ssize_t k;
@@ -162,15 +203,13 @@ void prepare_bwt_search(BWTSearch *search_info) {
     char end_char_found = FALSE;
     char __attribute__((aligned (32))) in_buffer[INPUT_BUF_SIZE];
 
-// #ifdef DEBUG
     memset(search_info->page_to_cache, UNCACHED_PAGE, sizeof(search_info->page_to_cache));
-// #endif
 
     // First snapshot starting state
-    search_info->rank_table[page_index].a_entry.val = 0;
-    search_info->rank_table[page_index].b_entry.val = 0;
-    search_info->rank_table[page_index].c_entry.val = 0;
-    search_info->rank_table[page_index].d_entry.val = 0;
+    search_info->rank_table[page_index].entries.a_entry.val = 0;
+    search_info->rank_table[page_index].entries.b_entry.val = 0;
+    search_info->rank_table[page_index].entries.c_entry.val = 0;
+    search_info->rank_table[page_index].entries.d_entry.val = 0;
     ++page_index;
 
     __m256i a_accum = _mm256_set1_epi8(0); 
@@ -186,37 +225,60 @@ void prepare_bwt_search(BWTSearch *search_info) {
         fprintf(stderr, "Read %ld bytes\n", k);
 #endif
         for (; i < k - CHAR_COUNT_STEP + 1; i += CHAR_COUNT_STEP) {
-            temp_256i_buf = _mm256_stream_load_si256((const __m256i*)(in_buffer + i));
-            a_accum = _mm256_sub_epi8(a_accum, _mm256_cmpeq_epi8(temp_256i_buf, A_CHAR_MASK));
-            c_accum = _mm256_sub_epi8(c_accum, _mm256_cmpeq_epi8(temp_256i_buf, C_CHAR_MASK));
-            g_accum = _mm256_sub_epi8(g_accum, _mm256_cmpeq_epi8(temp_256i_buf, G_CHAR_MASK));
-            t_accum = _mm256_sub_epi8(t_accum, _mm256_cmpeq_epi8(temp_256i_buf, T_CHAR_MASK));
-            // _pext_u64
+            // temp_256i_buf = _mm256_stream_load_si256((const __m256i*)(in_buffer + i));
+            a_accum = _mm256_sub_epi8(a_accum, _mm256_cmpeq_epi8(*(const __m256i*)(in_buffer + i), A_CHAR_MASK));
+            c_accum = _mm256_sub_epi8(c_accum, _mm256_cmpeq_epi8(*(const __m256i*)(in_buffer + i), C_CHAR_MASK));
+            g_accum = _mm256_sub_epi8(g_accum, _mm256_cmpeq_epi8(*(const __m256i*)(in_buffer + i), G_CHAR_MASK));
+            t_accum = _mm256_sub_epi8(t_accum, _mm256_cmpeq_epi8(*(const __m256i*)(in_buffer + i), T_CHAR_MASK));
+            // _mm_prefetch((void*)(in_buffer + i + CHAR_COUNT_STEP), _MM_HINT_T2);
             curr_index += CHAR_COUNT_STEP;
             // Snapshot rank table run counts
             if (__glibc_unlikely(curr_index % PAGE_SIZE == 0)) {
 #ifdef DEBUG
                 assert(page_index < RANK_TABLE_SIZE);
 #endif
-                u_int32_t a_accum_sum = mm256_hadd_epi8(a_accum);
-                u_int32_t c_accum_sum = mm256_hadd_epi8(c_accum);
-                u_int32_t g_accum_sum = mm256_hadd_epi8(g_accum);
-                u_int32_t t_accum_sum = mm256_hadd_epi8(t_accum);
+                // u_int32_t a_accum_sum = mm256_hadd_epi8(a_accum);
+                // u_int32_t c_accum_sum = mm256_hadd_epi8(c_accum);
+                // u_int32_t g_accum_sum = mm256_hadd_epi8(g_accum);
+                // u_int32_t t_accum_sum = mm256_hadd_epi8(t_accum);
+                // const __m256i accum_sums = mm256_hadd_epi8_4(a_accum, c_accum, g_accum, t_accum);
+                // const u_int32_t a_accum_sum = (accum_sums[2] & 0xFFFF);
+                // const u_int32_t c_accum_sum = (accum_sums[0] & 0xFFFF);
+                // const u_int32_t g_accum_sum = (accum_sums[2] & 0xFFFF0000) >> 16;
+                // const u_int32_t t_accum_sum = (accum_sums[0] & 0xFFFF0000) >> 16;
+                const __m128i accum_sums = mm256_hadd_epi8_4_128(a_accum, c_accum, g_accum, t_accum);
+                // const u_int32_t a_accum_sum = _mm_extract_epi32(accum_sums, 0);
+                // const u_int32_t c_accum_sum = _mm_extract_epi32(accum_sums, 1);
+                // const u_int32_t g_accum_sum = _mm_extract_epi32(accum_sums, 2);
+                // const u_int32_t t_accum_sum = _mm_extract_epi32(accum_sums, 3);
+                const u_int32_t a_accum_sum = accum_sums[0];
+                const u_int32_t c_accum_sum = accum_sums[0] >> 32;
+                const u_int32_t g_accum_sum = accum_sums[1];
+                const u_int32_t t_accum_sum = accum_sums[1] >> 32;
 
-                search_info->rank_table[page_index].a_entry.val =
-                    search_info->rank_table[acc_base_page].a_entry.val + a_accum_sum;
-                search_info->rank_table[page_index].b_entry.val =
-                    search_info->rank_table[acc_base_page].b_entry.val + c_accum_sum;
-                search_info->rank_table[page_index].c_entry.val =
-                    search_info->rank_table[acc_base_page].c_entry.val + g_accum_sum;
-                search_info->rank_table[page_index].d_entry.val =
-                    search_info->rank_table[acc_base_page].d_entry.val + t_accum_sum;
+                search_info->rank_table[page_index].int_vector = _mm_add_epi32(
+                        search_info->rank_table[acc_base_page].int_vector,
+                        accum_sums);
+
+                // search_info->rank_table[page_index].entries.a_entry.val =
+                //     search_info->rank_table[acc_base_page].entries.a_entry.val + a_accum_sum;
+                // search_info->rank_table[page_index].entries.b_entry.val =
+                //     search_info->rank_table[acc_base_page].entries.b_entry.val + c_accum_sum;
+                // search_info->rank_table[page_index].entries.c_entry.val =
+                //     search_info->rank_table[acc_base_page].entries.c_entry.val + g_accum_sum;
+                // search_info->rank_table[page_index].entries.d_entry.val =
+                //     search_info->rank_table[acc_base_page].entries.d_entry.val + t_accum_sum;
+
+#ifdef DEBUG
+                fprintf(stderr, "accum sums %u %u %u %u\n",
+                         a_accum_sum, c_accum_sum, g_accum_sum, t_accum_sum);
+#endif
 
                 if (__glibc_unlikely(!end_char_found && a_accum_sum + c_accum_sum + g_accum_sum + t_accum_sum !=
                                       (page_index - acc_base_page) * PAGE_SIZE)) {
 #ifdef DEBUG
-                    fprintf(stderr, "Found endchar around %u %d\n", curr_index,
-                        a_accum_sum + c_accum_sum + g_accum_sum + t_accum_sum);
+                    fprintf(stderr, "Found endchar around %u %d != %d\n", curr_index,
+                        a_accum_sum + c_accum_sum + g_accum_sum + t_accum_sum, (page_index - acc_base_page) * PAGE_SIZE);
 #endif
 #ifdef PERF
                     clock_t t = clock();
@@ -224,7 +286,7 @@ void prepare_bwt_search(BWTSearch *search_info) {
                     // Find ending char
                     unsigned backward_iter = 0;
                     do {
-                        temp_256i_buf = _mm256_cmpeq_epi8(temp_256i_buf, ENDING_CHAR_MASK);
+                        temp_256i_buf = _mm256_cmpeq_epi8(*(const __m256i*)(in_buffer + i - backward_iter * CHAR_COUNT_STEP), ENDING_CHAR_MASK);
                         for (unsigned buffer_int_index = 0; buffer_int_index < 4; ++buffer_int_index) {
                             u_int64_t end_char_bit_offset = _lzcnt_u64(temp_256i_buf[buffer_int_index]);
                             if (end_char_bit_offset != 64) {
@@ -234,12 +296,13 @@ void prepare_bwt_search(BWTSearch *search_info) {
                             }
                         }
                         ++backward_iter;
-                        if (backward_iter != PAGE_SIZE/CHAR_COUNT_STEP)
-                            temp_256i_buf = _mm256_load_si256(
-                                (const __m256i*)(in_buffer + i - backward_iter * CHAR_COUNT_STEP));
+                        // if (backward_iter != PAGE_SIZE/CHAR_COUNT_STEP)
+                        //     temp_256i_buf = _mm256_load_si256(
+                        //         (const __m256i*)(in_buffer + i - backward_iter * CHAR_COUNT_STEP));
                     } while (backward_iter < PAGE_SIZE/CHAR_COUNT_STEP);
 #ifdef PERF
-                    fprintf(stderr, "find end char took %f seconds to execute \n", ((double)clock() - t)/CLOCKS_PER_SEC);
+                    fprintf(stderr, "find end char took %f seconds to execute %d \n",
+                             ((double)clock() - t)/CLOCKS_PER_SEC, search_info->ending_char_index);
 #endif
                 }
 #ifdef DEBUG
@@ -282,14 +345,14 @@ void prepare_bwt_search(BWTSearch *search_info) {
             // Snapshot rank table run counts
             if (__glibc_unlikely(curr_index % PAGE_SIZE == 0)) {
                 // assert(page_index < PAGE_TABLE_SIZE);
-                search_info->rank_table[page_index].a_entry.val = 
-                    search_info->rank_table[acc_base_page].a_entry.val + tempRunCount[LANGUAGE[1]];
-                search_info->rank_table[page_index].b_entry.val = 
-                    search_info->rank_table[acc_base_page].b_entry.val + tempRunCount[LANGUAGE[2]];
-                search_info->rank_table[page_index].c_entry.val = 
-                    search_info->rank_table[acc_base_page].c_entry.val + tempRunCount[LANGUAGE[3]];
-                search_info->rank_table[page_index].d_entry.val = 
-                    search_info->rank_table[acc_base_page].d_entry.val + tempRunCount[LANGUAGE[4]];
+                search_info->rank_table[page_index].entries.a_entry.val = 
+                    search_info->rank_table[acc_base_page].entries.a_entry.val + tempRunCount[LANGUAGE[1]];
+                search_info->rank_table[page_index].entries.b_entry.val = 
+                    search_info->rank_table[acc_base_page].entries.b_entry.val + tempRunCount[LANGUAGE[2]];
+                search_info->rank_table[page_index].entries.c_entry.val = 
+                    search_info->rank_table[acc_base_page].entries.c_entry.val + tempRunCount[LANGUAGE[3]];
+                search_info->rank_table[page_index].entries.d_entry.val = 
+                    search_info->rank_table[acc_base_page].entries.d_entry.val + tempRunCount[LANGUAGE[4]];
                 tempRunCount[LANGUAGE[1]] = 0;
                 tempRunCount[LANGUAGE[2]] = 0;
                 tempRunCount[LANGUAGE[3]] = 0;
@@ -309,18 +372,18 @@ void prepare_bwt_search(BWTSearch *search_info) {
     u_int32_t c_accum_sum = mm256_hadd_epi8(c_accum);
     u_int32_t g_accum_sum = mm256_hadd_epi8(g_accum);
     u_int32_t t_accum_sum = mm256_hadd_epi8(t_accum);
-    search_info->rank_table[page_index].a_entry.val =
-        search_info->rank_table[acc_base_page].a_entry.val + a_accum_sum;
-    search_info->rank_table[page_index].b_entry.val =
-        search_info->rank_table[acc_base_page].b_entry.val + c_accum_sum;
-    search_info->rank_table[page_index].c_entry.val =
-        search_info->rank_table[acc_base_page].c_entry.val + g_accum_sum;
-    search_info->rank_table[page_index].d_entry.val =
-        search_info->rank_table[acc_base_page].d_entry.val + t_accum_sum;
-    search_info->rank_table[page_index].a_entry.val += tempRunCount[LANGUAGE[1]];
-    search_info->rank_table[page_index].b_entry.val += tempRunCount[LANGUAGE[2]];
-    search_info->rank_table[page_index].c_entry.val += tempRunCount[LANGUAGE[3]];
-    search_info->rank_table[page_index].d_entry.val += tempRunCount[LANGUAGE[4]];
+    search_info->rank_table[page_index].entries.a_entry.val =
+        search_info->rank_table[acc_base_page].entries.a_entry.val + a_accum_sum;
+    search_info->rank_table[page_index].entries.b_entry.val =
+        search_info->rank_table[acc_base_page].entries.b_entry.val + c_accum_sum;
+    search_info->rank_table[page_index].entries.c_entry.val =
+        search_info->rank_table[acc_base_page].entries.c_entry.val + g_accum_sum;
+    search_info->rank_table[page_index].entries.d_entry.val =
+        search_info->rank_table[acc_base_page].entries.d_entry.val + t_accum_sum;
+    search_info->rank_table[page_index].entries.a_entry.val += tempRunCount[LANGUAGE[1]];
+    search_info->rank_table[page_index].entries.b_entry.val += tempRunCount[LANGUAGE[2]];
+    search_info->rank_table[page_index].entries.c_entry.val += tempRunCount[LANGUAGE[3]];
+    search_info->rank_table[page_index].entries.d_entry.val += tempRunCount[LANGUAGE[4]];
     if (__glibc_unlikely(!end_char_found)) {
         // Find ending char
         for (int backward_iter = i - 1; backward_iter >= 0; --backward_iter) {
@@ -339,13 +402,13 @@ void prepare_bwt_search(BWTSearch *search_info) {
 
     search_info->CTable[LANGUAGE[1]] = 1;
     search_info->CTable[LANGUAGE[2]] = 
-        search_info->CTable[LANGUAGE[1]] + search_info->rank_table[page_index].a_entry.val;
+        search_info->CTable[LANGUAGE[1]] + search_info->rank_table[page_index].entries.a_entry.val;
     search_info->CTable[LANGUAGE[3]] =
-        search_info->CTable[LANGUAGE[2]] + search_info->rank_table[page_index].b_entry.val;
+        search_info->CTable[LANGUAGE[2]] + search_info->rank_table[page_index].entries.b_entry.val;
     search_info->CTable[LANGUAGE[4]] =
-        search_info->CTable[LANGUAGE[3]] + search_info->rank_table[page_index].c_entry.val;
+        search_info->CTable[LANGUAGE[3]] + search_info->rank_table[page_index].entries.c_entry.val;
     search_info->CTable[LANGUAGE[5]] =
-        search_info->CTable[LANGUAGE[4]] + search_info->rank_table[page_index].d_entry.val;
+        search_info->CTable[LANGUAGE[4]] + search_info->rank_table[page_index].entries.d_entry.val;
 
     search_info->rank_table_size = curr_index;
 }
@@ -408,10 +471,10 @@ unsigned get_occurence(BWTSearch *search_info, const char c, const size_t index)
     unsigned tempRunCount[128];
     tempRunCount['\n'] = 0;
     // Load in char counts until this page
-    tempRunCount[LANGUAGE[1]] = search_info->rank_table[snapshot_page_index].a_entry.val;
-    tempRunCount[LANGUAGE[2]] = search_info->rank_table[snapshot_page_index].b_entry.val;
-    tempRunCount[LANGUAGE[3]] = search_info->rank_table[snapshot_page_index].c_entry.val;
-    tempRunCount[LANGUAGE[4]] = search_info->rank_table[snapshot_page_index].d_entry.val;
+    tempRunCount[LANGUAGE[1]] = search_info->rank_table[snapshot_page_index].entries.a_entry.val;
+    tempRunCount[LANGUAGE[2]] = search_info->rank_table[snapshot_page_index].entries.b_entry.val;
+    tempRunCount[LANGUAGE[3]] = search_info->rank_table[snapshot_page_index].entries.c_entry.val;
+    tempRunCount[LANGUAGE[4]] = search_info->rank_table[snapshot_page_index].entries.d_entry.val;
     // clock_t t = clock();
     // Fill out char counts for this page
     unsigned char_index = snapshot_page_index * PAGE_SIZE - (direction == 1 ? 0 : 1);
@@ -528,10 +591,10 @@ void print_rank_table(const BWTSearch *search_info) {
 void print_cumtable(const BWTSearch *search_info) {
     // for (unsigned i = 0; i < search_info->rank_table_size / PAGE_SIZE + 1; ++i) {
     for (unsigned i = 0; i < 4; ++i) {
-        fprintf(stderr, "%u,", search_info->rank_table[i].a_entry.val);
-        fprintf(stderr, "%u,", search_info->rank_table[i].b_entry.val);
-        fprintf(stderr, "%u,", search_info->rank_table[i].c_entry.val);
-        fprintf(stderr, "%u,", search_info->rank_table[i].d_entry.val);
+        fprintf(stderr, "%u,", search_info->rank_table[i].entries.a_entry.val);
+        fprintf(stderr, "%u,", search_info->rank_table[i].entries.b_entry.val);
+        fprintf(stderr, "%u,", search_info->rank_table[i].entries.c_entry.val);
+        fprintf(stderr, "%u,", search_info->rank_table[i].entries.d_entry.val);
         fprintf(stderr, "\n");
     }
 }
@@ -549,6 +612,8 @@ int main(int argc, char *argv[]) {
     SHUFFLE_16_DOWN = _mm_setr_epi8(0, 1, 8, 9, 4, 5, 6, 7, 2, 3, 10, 11, 12, 13, 14, 15);
     SHUFFLE_16_DOWN_256 = _mm256_setr_epi8(0, 1, 8, 9, 4, 5, 6, 7, 2, 3, 10, 11, 12, 13, 14, 15,
                                             0, 1, 8, 9, 4, 5, 6, 7, 2, 3, 10, 11, 12, 13, 14, 15);
+    SHUFFLE_2x2x16_4x16 = _mm_setr_epi8(8, 9, 6, 7, 0, 1, 6, 7, 10, 11, 14, 15, 2, 3, 14, 15);
+
 #ifdef DEBUG
     printf("%ld \n", sizeof(A_CHAR_MASK[0]));
     printf("%c %c %c %c\n",
