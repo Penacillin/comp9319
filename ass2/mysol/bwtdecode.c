@@ -172,68 +172,6 @@ off_t open_input_file(BWTDecode* decode_info, char *bwt_file_path) {
     return res;
 }
 
-long long read_busy_waits = 0;
-// '\n'ACGT
-void build_tables(BWTDecode *decode_info) {
-    ssize_t k;
-    unsigned curr_index = 0;
-    unsigned rank_index = 0;
-    unsigned page_index = 0;
-    unsigned tempRunCount[128] = {0};
-    char in_buffer[INPUT_BUF_SIZE];
-    // char in_buffer2[INPUT_BUF_SIZE];
-    // struct aiocb aiocbp;
-    // memset(&aiocbp, 0, sizeof(struct aiocb));
-    // char first_write = FALSE;
-    // char aiocbp_curr = 0;
-    // aiocbp.aio_fildes = decode_info->bwt_file_fd;
-    // aiocbp.aio_buf = in_buffer;
-    // aiocbp.aio_nbytes = INPUT_BUF_SIZE;
-
-    while((k = read(decode_info->bwt_file_fd, in_buffer, INPUT_BUF_SIZE)) > 0) {
-        for (ssize_t i = 0; i < k;) {
-            // Clear out page ready to input symbols
-            decode_info->rankTable[page_index].symbol_array.char_array[rank_index] = 0;
-            for (unsigned j = 0; j < RANK_ENTRY_SIZE && i < k; ++j, ++i) {
-                // Snapshot runCount
-                if (__glibc_unlikely(curr_index % TABLE_SIZE == 0)) {
-                    // assert(page_index < PAGE_TABLE_SIZE);
-                    decode_info->rankTable[page_index].snapshot.a_entry.val = tempRunCount[LANGUAGE[1]];
-                    decode_info->rankTable[page_index].snapshot.b_entry.val |= tempRunCount[LANGUAGE[2]];
-                    decode_info->rankTable[page_index].snapshot.c_entry.val |= tempRunCount[LANGUAGE[3]];
-                    decode_info->rankTable[page_index].snapshot.d_entry.val |= tempRunCount[LANGUAGE[4]] << 8;
-                    ++page_index;
-                    rank_index = 0;
-                }
-
-                const char c = in_buffer[i];
-                if (__glibc_unlikely(c == '\n')) decode_info->endingCharIndex = curr_index;
-                // Add to all CTable above char
-                const unsigned char_val = get_char_index(c);
-                for (unsigned k = char_val + 1; k < LANGUAGE_SIZE; ++k) {
-                    ++(decode_info->CTable[LANGUAGE[k]]);
-                }
-                // 00000001 00000010 00000011 00000010
-                // 00000000 00000000 00000000 01101110
-                // Put symbol into rank array
-                decode_info->rankTable[page_index-1].symbol_array.char_array[rank_index] |=
-                    ((char_val - 1) & 0b11) << (j*BITS_PER_SYMBOL);
-
-                // Run count for rank table
-                ++tempRunCount[(unsigned)c];
-
-                ++curr_index;
-            }
-            ++rank_index;
-        }
-    }
-    decode_info->rankTable[page_index].snapshot.a_entry.val = tempRunCount[LANGUAGE[1]];
-    decode_info->rankTable[page_index].snapshot.b_entry.val |= tempRunCount[LANGUAGE[2]];
-    decode_info->rankTable[page_index].snapshot.c_entry.val |= tempRunCount[LANGUAGE[3]];
-    decode_info->rankTable[page_index].snapshot.d_entry.val |= tempRunCount[LANGUAGE[4]] << 8;
-
-    decode_info->rankTableSize = curr_index;
-}
 
 void my_bswap64(u_int64_t value, void* dest)
 {
@@ -406,6 +344,7 @@ void prepare_bwt_decode(BWTDecode *decode_info) {
                 // Snapshot runCount
                 if (__glibc_unlikely(curr_index % TABLE_SIZE == 0)) {
                     // assert(page_index < PAGE_TABLE_SIZE);
+                    fprintf(stderr, "WARNING: Incorrectly snapshoting\n");
                     decode_info->rankTable[page_index].snapshot.a_entry.val = 
                         (decode_info->rankTable[acc_base_page].snapshot.a_entry.val & RUN_COUNT_LOWER_MASK) + tempRunCount[LANGUAGE[1]];
                     decode_info->rankTable[page_index].snapshot.b_entry.val |=
@@ -720,8 +659,10 @@ int main(int argc, char** argv) {
 
     close(bwtDecode.bwt_file_fd);
 
+#ifdef PERF
     printf("reader timer %lf\n", reader_timer);
     printf("write busy waits   %lu\n", busy_waits);
+#endif
 
     return 0;
 }
