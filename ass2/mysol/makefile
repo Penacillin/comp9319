@@ -1,5 +1,5 @@
 CXX=gcc
-CFLAGS=-Wextra -Wall -Werror --std=c11 -march=core-avx2 -march=native
+CFLAGS=-Wextra -Wall -Werror --std=c11 -march=core-avx2
 LDFLAGS=-lrt
 
 default: CFLAGS += -O3
