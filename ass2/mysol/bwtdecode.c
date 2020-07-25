@@ -9,6 +9,10 @@
 #include <assert.h>
 #include <time.h>
 #include <aio.h>
+#include <immintrin.h>
+
+
+#include "vector_utils.h"
 
 #define ENDING_CHAR '\n'
 #define TABLE_SIZE 32
@@ -16,9 +20,19 @@
 #define RANK_ENTRY_SIZE 4
 #define RANK_ENTRY_MASK 0b11
 #define BITS_PER_SYMBOL 2
-#define RANK_TABLE_SIZE (15728640/RANK_ENTRY_SIZE) // 4 chars per 8 bits (2 bits per char)
+#define rankTable_SIZE (15728640/RANK_ENTRY_SIZE) // 4 chars per 8 bits (2 bits per char)
 #define INPUT_BUF_SIZE 524288
 #define OUTPUT_BUF_SIZE 210000
+
+// 256/8 chars per 256 bit accumulator
+#define CHAR_COUNT_STEP (256/8)
+__m256i A_CHAR_MASK;
+__m256i C_CHAR_MASK;
+__m256i G_CHAR_MASK;
+__m256i T_CHAR_MASK;
+__m256i ENDING_CHAR_MASK;
+__m256i ONE_CHAR_MASK;
+const unsigned long long CHAR_EXTRACT8_2_MASK = 0x6666666666666666;
 
 #define FALSE 0
 #define TRUE 1
@@ -53,9 +67,15 @@ union RunCountCumEntry {
 
 // Use pages of 32 symbols (8 chars (4 symbols per char))
 // With a snapshot of all pages leading to this page
+#if TABLE_SIZE/RANK_ENTRY_SIZE != 8
+#warning "Rank Entry chars not 8, union may be wrong."
+#endif
 typedef struct __attribute__((__packed__))  _RankEntry {
     union RunCountCumEntry snapshot;
-    char symbol_array[TABLE_SIZE/RANK_ENTRY_SIZE];
+    union _SymbolArray {
+        char char_array[TABLE_SIZE/RANK_ENTRY_SIZE];
+        u_int64_t int_val;
+    } symbol_array;
 } RankEntry;
 
 
@@ -73,6 +93,7 @@ typedef struct _BWTDecode {
 
 #define LANGUAGE_SIZE 5
 const unsigned LANGUAGE[LANGUAGE_SIZE] = {'\n', 'A', 'C', 'G', 'T'};
+const unsigned SYMBOL_ARRAY_LANGUAGE[LANGUAGE_SIZE] = {'A', 'C', 'T', 'G'};
 
 static inline unsigned get_char_index(const char c) {
 #ifdef DEBUG
@@ -102,9 +123,9 @@ static inline unsigned get_rank_entry_char_index(const char c) {
     switch(c)  {
         case 'A': return 0;
         case 'C': return 1;
-        case 'G': return 2;
-        case 'T': return 3;
-        case '\n': return 3;
+        case 'G': return 3;
+        case 'T': return 2;
+        case '\n': return 2;
     };
     fprintf(stderr, "FATAL UNKOWN CHARACTER %d\n", c);
     exit(1);
@@ -112,8 +133,8 @@ static inline unsigned get_rank_entry_char_index(const char c) {
     switch(c)  {
         case 'A': return 0;
         case 'C': return 1;
-        case 'G': return 2;
-        default: return 3;
+        case 'G': return 3;
+        default: return 2;
     };
 #endif
 }
@@ -122,6 +143,7 @@ static inline unsigned get_rank_entry_char_index(const char c) {
 // 0      2      6     9
 // 0000   0010   0110  1001
 // 01000001  01000011  01000111  01010100
+// compressed mask: 0x6 = 0b00000110
 // 0 1 2 3
 // 0000   0001   0010  0011
 // A + B + C + D == T <= 15mil . 8 bytes (64 bits). naive = 9 bytes (72 bits).
@@ -171,7 +193,7 @@ void build_tables(BWTDecode *decode_info) {
     while((k = read(decode_info->bwt_file_fd, in_buffer, INPUT_BUF_SIZE)) > 0) {
         for (ssize_t i = 0; i < k;) {
             // Clear out page ready to input symbols
-            decode_info->rankTable[page_index].symbol_array[rank_index] = 0;
+            decode_info->rankTable[page_index].symbol_array.char_array[rank_index] = 0;
             for (unsigned j = 0; j < RANK_ENTRY_SIZE && i < k; ++j, ++i) {
                 // Snapshot runCount
                 if (__glibc_unlikely(curr_index % TABLE_SIZE == 0)) {
@@ -194,7 +216,7 @@ void build_tables(BWTDecode *decode_info) {
                 // 00000001 00000010 00000011 00000010
                 // 00000000 00000000 00000000 01101110
                 // Put symbol into rank array
-                decode_info->rankTable[page_index-1].symbol_array[rank_index] |=
+                decode_info->rankTable[page_index-1].symbol_array.char_array[rank_index] |=
                     ((char_val - 1) & 0b11) << (j*BITS_PER_SYMBOL);
 
                 // Run count for rank table
@@ -213,6 +235,244 @@ void build_tables(BWTDecode *decode_info) {
     decode_info->rankTableSize = curr_index;
 }
 
+void my_bswap64(u_int64_t value, void* dest)
+{
+  value =
+      ((value & 0xFF00000000000000u) >> 56u) |
+      ((value & 0x00FF000000000000u) >> 40u) |
+      ((value & 0x0000FF0000000000u) >> 24u) |
+      ((value & 0x000000FF00000000u) >>  8u) |
+      ((value & 0x00000000FF000000u) <<  8u) |      
+      ((value & 0x0000000000FF0000u) << 24u) |
+      ((value & 0x000000000000FF00u) << 40u) |
+      ((value & 0x00000000000000FFu) << 56u);
+  memcpy(dest, &value, sizeof(u_int64_t));
+}
+
+
+void prepare_bwt_decode(BWTDecode *decode_info) {
+    ssize_t k;
+    unsigned curr_index = 0;
+    unsigned acc_base_page = 0;
+    unsigned page_index = 0;
+    unsigned tempRunCount[128] = {0};
+    char end_char_found = FALSE;
+    char __attribute__((aligned (32))) in_buffer[INPUT_BUF_SIZE];
+
+
+    // First snapshot starting state
+    decode_info->rankTable[page_index].snapshot.a_entry.val = 0;
+    decode_info->rankTable[page_index].snapshot.b_entry.val = 0;
+    decode_info->rankTable[page_index].snapshot.c_entry.val = 0;
+    decode_info->rankTable[page_index].snapshot.d_entry.val = 0;
+    ++page_index;
+
+    __m256i a_accum = _mm256_set1_epi8(0); 
+    __m256i c_accum = _mm256_set1_epi8(0); 
+    __m256i g_accum = _mm256_set1_epi8(0); 
+    __m256i t_accum = _mm256_set1_epi8(0); 
+    __m256i temp_256i_buf;
+
+    ssize_t i = 0;
+    while(__glibc_likely((k = read(decode_info->bwt_file_fd, in_buffer, INPUT_BUF_SIZE)) > 0)) {
+        i = 0;
+#ifdef DEBUG
+        fprintf(stderr, "Read %ld bytes\n", k);
+#endif
+        for (; i < k - CHAR_COUNT_STEP + 1; i += CHAR_COUNT_STEP) {
+            // temp_256i_buf = _mm256_stream_load_si256((const __m256i*)(in_buffer + i));
+            a_accum = _mm256_sub_epi8(a_accum, _mm256_cmpeq_epi8(*(const __m256i*)(in_buffer + i), A_CHAR_MASK));
+            c_accum = _mm256_sub_epi8(c_accum, _mm256_cmpeq_epi8(*(const __m256i*)(in_buffer + i), C_CHAR_MASK));
+            g_accum = _mm256_sub_epi8(g_accum, _mm256_cmpeq_epi8(*(const __m256i*)(in_buffer + i), G_CHAR_MASK));
+            t_accum = _mm256_sub_epi8(t_accum, _mm256_cmpeq_epi8(*(const __m256i*)(in_buffer + i), T_CHAR_MASK));
+            // _mm_prefetch((void*)(in_buffer + i + CHAR_COUNT_STEP), _MM_HINT_T2);
+
+            // Write symbols into symbol_array.char_array through int_Val
+            u_int64_t string_2bit_chars;
+            my_bswap64(_pext_u64(
+                *(unsigned long long*)(in_buffer+i), CHAR_EXTRACT8_2_MASK) | 
+                    (_pext_u64(*(unsigned long long*)(in_buffer+i+8), CHAR_EXTRACT8_2_MASK) << 16) | 
+                    (_pext_u64(*(unsigned long long*)(in_buffer+i+16), CHAR_EXTRACT8_2_MASK) << 32) |
+                    (_pext_u64(*(unsigned long long*)(in_buffer+i+24), CHAR_EXTRACT8_2_MASK) << 48),
+                &string_2bit_chars);
+
+            decode_info->rankTable->symbol_array.int_val = string_2bit_chars;
+
+            curr_index += CHAR_COUNT_STEP;
+            // Snapshot rank table run counts
+            if (__glibc_unlikely(curr_index % TABLE_SIZE == 0)) {
+#ifdef DEBUG
+                assert(page_index < rankTable_SIZE);
+#endif
+                // u_int32_t a_accum_sum = mm256_hadd_epi8(a_accum);
+                // u_int32_t c_accum_sum = mm256_hadd_epi8(c_accum);
+                // u_int32_t g_accum_sum = mm256_hadd_epi8(g_accum);
+                // u_int32_t t_accum_sum = mm256_hadd_epi8(t_accum);
+                // const __m256i accum_sums = mm256_hadd_epi8_4(a_accum, c_accum, g_accum, t_accum);
+                // const u_int32_t a_accum_sum = (accum_sums[2] & 0xFFFF);
+                // const u_int32_t c_accum_sum = (accum_sums[0] & 0xFFFF);
+                // const u_int32_t g_accum_sum = (accum_sums[2] & 0xFFFF0000) >> 16;
+                // const u_int32_t t_accum_sum = (accum_sums[0] & 0xFFFF0000) >> 16;
+                const __m128i accum_sums = mm256_hadd_epi8_4_128(a_accum, c_accum, g_accum, t_accum);
+                // const u_int32_t a_accum_sum = _mm_extract_epi32(accum_sums, 0);
+                // const u_int32_t c_accum_sum = _mm_extract_epi32(accum_sums, 1);
+                // const u_int32_t g_accum_sum = _mm_extract_epi32(accum_sums, 2);
+                // const u_int32_t t_accum_sum = _mm_extract_epi32(accum_sums, 3);
+                const u_int32_t a_accum_sum = accum_sums[0];
+                const u_int32_t c_accum_sum = accum_sums[0] >> 32;
+                const u_int32_t g_accum_sum = accum_sums[1];
+                const u_int32_t t_accum_sum = accum_sums[1] >> 32;
+
+
+                decode_info->rankTable[page_index].snapshot.a_entry.val =
+                    decode_info->rankTable[acc_base_page].snapshot.a_entry.val + a_accum_sum;
+                decode_info->rankTable[page_index].snapshot.b_entry.val =
+                    decode_info->rankTable[acc_base_page].snapshot.b_entry.val + c_accum_sum;
+                decode_info->rankTable[page_index].snapshot.c_entry.val =
+                    decode_info->rankTable[acc_base_page].snapshot.c_entry.val + g_accum_sum;
+                decode_info->rankTable[page_index].snapshot.d_entry.val |=
+                    (decode_info->rankTable[acc_base_page].snapshot.d_entry.val + t_accum_sum) << 8;
+
+#ifdef DEBUG
+                fprintf(stderr, "accum sums %u %u %u %u\n",
+                         a_accum_sum, c_accum_sum, g_accum_sum, t_accum_sum);
+#endif
+
+                if (__glibc_unlikely(!end_char_found && a_accum_sum + c_accum_sum + g_accum_sum + t_accum_sum !=
+                                      (page_index - acc_base_page) * TABLE_SIZE)) {
+#ifdef DEBUG
+                    fprintf(stderr, "Found endchar around %u %d != %d\n", curr_index,
+                        a_accum_sum + c_accum_sum + g_accum_sum + t_accum_sum, (page_index - acc_base_page) * TABLE_SIZE);
+#endif
+#ifdef PERF
+                    clock_t t = clock();
+#endif
+                    // Find ending char
+                    unsigned backward_iter = 0;
+                    do {
+                        temp_256i_buf = _mm256_cmpeq_epi8(*(const __m256i*)(in_buffer + i - backward_iter * CHAR_COUNT_STEP), ENDING_CHAR_MASK);
+                        for (unsigned buffer_int_index = 0; buffer_int_index < 4; ++buffer_int_index) {
+                            u_int64_t end_char_bit_offset = _lzcnt_u64(temp_256i_buf[buffer_int_index]);
+                            if (end_char_bit_offset != 64) {
+                                decode_info->endingCharIndex =
+                                    curr_index - (backward_iter+1) * CHAR_COUNT_STEP + buffer_int_index * 8 + (8 - (end_char_bit_offset/8 + 1));
+                                end_char_found = TRUE;
+                            }
+                        }
+                        ++backward_iter;
+                        // if (backward_iter != TABLE_SIZE/CHAR_COUNT_STEP)
+                        //     temp_256i_buf = _mm256_load_si256(
+                        //         (const __m256i*)(in_buffer + i - backward_iter * CHAR_COUNT_STEP));
+                    } while (backward_iter < TABLE_SIZE/CHAR_COUNT_STEP);
+#ifdef PERF
+                    fprintf(stderr, "find end char took %f seconds to execute %d \n",
+                             ((double)clock() - t)/CLOCKS_PER_SEC, decode_info->endingCharIndex);
+#endif
+                }
+#ifdef DEBUG
+                // printf("accums (%d): a=%d,c=%d,g=%d,t=%d\n",
+                //     curr_index,
+                //     mm256_hadd_epi8(a_accum),
+                //     mm256_hadd_epi8(c_accum),
+                //     mm256_hadd_epi8(g_accum),
+                //     mm256_hadd_epi8(t_accum));
+#endif
+                // TODO: only need to do this when 255 per position max (32 accumulators, 8 per page, 256/8=32 pages)
+                // only have to set every 32 pages
+                if (page_index > acc_base_page + 7) {
+                    a_accum = _mm256_set1_epi8(0); 
+                    c_accum = _mm256_set1_epi8(0); 
+                    g_accum = _mm256_set1_epi8(0); 
+                    t_accum = _mm256_set1_epi8(0);
+                    acc_base_page = page_index;
+                }
+
+                ++page_index;
+            }
+        }
+        unsigned rank_index = 0;
+        for (;i < k; i += 1, ++rank_index) {
+            // Clear out page ready to input symbols
+            decode_info->rankTable[page_index].symbol_array.char_array[rank_index] = 0;
+            for (unsigned j = 0; j < RANK_ENTRY_SIZE && i < k; ++j, ++i) {
+                const char c = in_buffer[i];
+                if (__glibc_unlikely(c == '\n')) decode_info->endingCharIndex = curr_index;
+                const unsigned char_val = get_rank_entry_char_index(c);
+                // Put symbol into rank array
+                decode_info->rankTable[page_index].symbol_array.char_array[rank_index] |=
+                    (char_val & 0b11) << (j*BITS_PER_SYMBOL);
+
+                // Run count for rank table
+                ++tempRunCount[(unsigned)c];
+
+                ++curr_index;
+                // Snapshot runCount
+                if (__glibc_unlikely(curr_index % TABLE_SIZE == 0)) {
+                    // assert(page_index < PAGE_TABLE_SIZE);
+                    decode_info->rankTable[page_index].snapshot.a_entry.val = tempRunCount[LANGUAGE[1]];
+                    decode_info->rankTable[page_index].snapshot.b_entry.val |= tempRunCount[LANGUAGE[2]];
+                    decode_info->rankTable[page_index].snapshot.c_entry.val |= tempRunCount[LANGUAGE[3]];
+                    decode_info->rankTable[page_index].snapshot.d_entry.val |= tempRunCount[LANGUAGE[4]] << 8;
+                    ++page_index;
+                    rank_index = 0;
+                }
+            }
+        }
+    }
+#ifdef DEBUG
+    printf("accums: a=%d,c=%d,g=%d,t=%d\n",
+            mm256_hadd_epi8(a_accum),
+            mm256_hadd_epi8(c_accum),
+            mm256_hadd_epi8(g_accum),
+            mm256_hadd_epi8(t_accum));
+#endif
+    u_int32_t a_accum_sum = mm256_hadd_epi8(a_accum);
+    u_int32_t c_accum_sum = mm256_hadd_epi8(c_accum);
+    u_int32_t g_accum_sum = mm256_hadd_epi8(g_accum);
+    u_int32_t t_accum_sum = mm256_hadd_epi8(t_accum);
+    decode_info->rankTable[page_index].snapshot.a_entry.val =
+        decode_info->rankTable[acc_base_page].snapshot.a_entry.val + a_accum_sum;
+    decode_info->rankTable[page_index].snapshot.b_entry.val =
+        decode_info->rankTable[acc_base_page].snapshot.b_entry.val + c_accum_sum;
+    decode_info->rankTable[page_index].snapshot.c_entry.val =
+        decode_info->rankTable[acc_base_page].snapshot.c_entry.val + g_accum_sum;
+    decode_info->rankTable[page_index].snapshot.d_entry.val =
+        decode_info->rankTable[acc_base_page].snapshot.d_entry.val + t_accum_sum;
+    decode_info->rankTable[page_index].snapshot.a_entry.val += tempRunCount[LANGUAGE[1]];
+    decode_info->rankTable[page_index].snapshot.b_entry.val += tempRunCount[LANGUAGE[2]];
+    decode_info->rankTable[page_index].snapshot.c_entry.val += tempRunCount[LANGUAGE[3]];
+    decode_info->rankTable[page_index].snapshot.d_entry.val += tempRunCount[LANGUAGE[4]];
+    if (__glibc_unlikely(!end_char_found)) {
+        // Find ending char
+        for (int backward_iter = i - 1; backward_iter >= 0; --backward_iter) {
+            if (in_buffer[backward_iter] == ENDING_CHAR) {
+                decode_info->endingCharIndex = curr_index - (i - backward_iter);
+#ifdef DEBUG
+                fprintf(stderr, "Found ending char index in remainder %d\n", backward_iter);
+#endif
+                break;
+            }
+        }
+    }
+#ifdef DEBUG
+    fprintf(stderr, "endingCharIndex %d %d\n", end_char_found, decode_info->endingCharIndex);
+#endif
+
+    decode_info->CTable[LANGUAGE[1]] = 1;
+    decode_info->CTable[LANGUAGE[2]] = 
+        decode_info->CTable[LANGUAGE[1]] + decode_info->rankTable[page_index].snapshot.a_entry.val;
+    decode_info->CTable[LANGUAGE[3]] =
+        decode_info->CTable[LANGUAGE[2]] + decode_info->rankTable[page_index].snapshot.b_entry.val;
+    decode_info->CTable[LANGUAGE[4]] =
+        decode_info->CTable[LANGUAGE[3]] + decode_info->rankTable[page_index].snapshot.c_entry.val;
+    decode_info->CTable[LANGUAGE[5]] =
+        decode_info->CTable[LANGUAGE[4]] + decode_info->rankTable[page_index].snapshot.d_entry.val;
+
+    decode_info->rankTableSize = curr_index;
+}
+
+
+
 void print_ctable(const BWTDecode *decode_info) {
     for (unsigned i = 0; i < 5; ++i) {
         printf("%c: %d\n", LANGUAGE[i], decode_info->CTable[(unsigned)LANGUAGE[i]]);
@@ -225,7 +485,7 @@ void print_ranktable(const BWTDecode *decode_info) {
         const unsigned page_index = i / TABLE_SIZE;
         const unsigned rank_index = (i - page_index * TABLE_SIZE) / RANK_ENTRY_SIZE;
         fprintf(stderr, "%d(page=%d,rank=%d,entry=%d) >%c<\n", i, page_index, rank_index, rank_entry_index,
-            LANGUAGE[((decode_info->rankTable[page_index].symbol_array[rank_index] >> (rank_entry_index*BITS_PER_SYMBOL)) & 0b11)+1]);
+            SYMBOL_ARRAY_LANGUAGE[((decode_info->rankTable[page_index].symbol_array.char_array[rank_index] >> (rank_entry_index*BITS_PER_SYMBOL)) & 0b11)]);
     }
     printf("%d is endchar\n", decode_info->endingCharIndex);
 }
@@ -274,7 +534,7 @@ static inline char get_char_rank(const unsigned index, BWTDecode *decode_info, u
 #endif
     if (direction == 1) {
         out_char =
-            LANGUAGE[((decode_info->rankTable[page_index].symbol_array[rank_index] >> (rank_entry_index*BITS_PER_SYMBOL)) & 0b11) + 1];
+            SYMBOL_ARRAY_LANGUAGE[((decode_info->rankTable[page_index].symbol_array.char_array[rank_index] >> (rank_entry_index*BITS_PER_SYMBOL)) & 0b11)];
         ++tempRunCount[out_char];
         while(__glibc_likely(char_index < index)) {
             ++rank_entry_index;
@@ -283,14 +543,14 @@ static inline char get_char_rank(const unsigned index, BWTDecode *decode_info, u
                 ++rank_index;
             }
             out_char =
-                LANGUAGE[((decode_info->rankTable[page_index].symbol_array[rank_index] >> (rank_entry_index*BITS_PER_SYMBOL)) & 0b11) + 1];
+                SYMBOL_ARRAY_LANGUAGE[((decode_info->rankTable[page_index].symbol_array.char_array[rank_index] >> (rank_entry_index*BITS_PER_SYMBOL)) & 0b11)];
             ++tempRunCount[out_char];
             ++char_index;
         };
         --tempRunCount[out_char];
     } else {
         out_char =
-            LANGUAGE[((decode_info->rankTable[page_index].symbol_array[rank_index] >> (rank_entry_index*BITS_PER_SYMBOL)) & 0b11) + 1];
+            SYMBOL_ARRAY_LANGUAGE[((decode_info->rankTable[page_index].symbol_array.char_array[rank_index] >> (rank_entry_index*BITS_PER_SYMBOL)) & 0b11)];
         --tempRunCount[out_char];
         while(__glibc_likely(char_index > index)) {
             --rank_entry_index;
@@ -299,7 +559,7 @@ static inline char get_char_rank(const unsigned index, BWTDecode *decode_info, u
                 --rank_index;
             }
             out_char =
-                LANGUAGE[((decode_info->rankTable[page_index].symbol_array[rank_index] >> (rank_entry_index*BITS_PER_SYMBOL)) & 0b11) + 1];
+                SYMBOL_ARRAY_LANGUAGE[((decode_info->rankTable[page_index].symbol_array.char_array[rank_index] >> (rank_entry_index*BITS_PER_SYMBOL)) & 0b11)];
             --tempRunCount[out_char];
             --char_index;
 #ifdef DEBUG
@@ -324,7 +584,8 @@ int setup_BWT(BWTDecode *decode_info, char* output_file_path) {
     }
 
     clock_t t = clock();
-    build_tables(decode_info);
+    // build_tables(decode_info);
+    prepare_bwt_decode(decode_info);
     t = clock() - t;
     printf("build_tables() took %f seconds to execute \n", ((double)t)/CLOCKS_PER_SEC);
 

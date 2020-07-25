@@ -1,5 +1,5 @@
 CXX=gcc
-CFLAGS=-Wextra -Wall -Werror --std=c11 -march=core-avx2
+CFLAGS=-Wextra -Wall -Werror --std=c11 -march=core-avx2 -march=native
 LDFLAGS=-lrt
 
 default: CFLAGS += -O3
@@ -13,10 +13,10 @@ perf: executables
 
 executables: bwtdecode bwtsearch
 
-bwtdecode: bwtdecode.c
+bwtdecode: bwtdecode.c vector_utils.h
 	$(CXX) $(CFLAGS) -o $@ $< $(LDFLAGS)
 
-bwtsearch: bwtsearch.c
+bwtsearch: bwtsearch.c vector_utils.h
 	$(CXX) $(CFLAGS) -o $@ $< $(LDFLAGS)
 
 remake: clean default
