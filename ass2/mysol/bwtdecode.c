@@ -120,7 +120,8 @@ static inline unsigned get_rank_entry_char_index(const char c) {
 
 // A      C      G     T
 // 0      2      6     9
-// 0000   0010   0110  1001 
+// 0000   0010   0110  1001
+// 01000001  01000011  01000111  01010100
 // 0 1 2 3
 // 0000   0001   0010  0011
 // A + B + C + D == T <= 15mil . 8 bytes (64 bits). naive = 9 bytes (72 bits).
