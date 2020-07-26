@@ -24,7 +24,7 @@
 #define BITS_PER_SYMBOL 2
 #define rankTable_SIZE (15728640/RANK_ENTRY_SIZE) // 4 chars per 8 bits (2 bits per char)
 #define INPUT_BUF_SIZE 524288
-#define OUTPUT_BUF_SIZE 210000
+#define OUTPUT_BUF_SIZE 524288
 
 // 256/8 chars per 256 bit accumulator
 #define CHAR_COUNT_STEP (256/8)
@@ -220,8 +220,8 @@ void prepare_bwt_decode(BWTDecode *decode_info) {
             g_accum = _mm256_sub_epi8(g_accum, _mm256_cmpeq_epi8(*(const __m256i*)(in_buffer + i), G_CHAR_MASK));
             t_accum = _mm256_sub_epi8(t_accum, _mm256_cmpeq_epi8(*(const __m256i*)(in_buffer + i), T_CHAR_MASK));
             // _mm_prefetch((void*)(in_buffer + i + CHAR_COUNT_STEP), _MM_HINT_T2);
-            const u_int64_t string_2bit_chars = _pext_u64(
-                    *(unsigned long long*)(in_buffer+i), CHAR_EXTRACT8_2_MASK) | 
+            const u_int64_t string_2bit_chars =
+                    _pext_u64(*(unsigned long long*)(in_buffer+i), CHAR_EXTRACT8_2_MASK) | 
                     (_pext_u64(*(unsigned long long*)(in_buffer+i+8), CHAR_EXTRACT8_2_MASK) << 16) | 
                     (_pext_u64(*(unsigned long long*)(in_buffer+i+16), CHAR_EXTRACT8_2_MASK) << 32) |
                     (_pext_u64(*(unsigned long long*)(in_buffer+i+24), CHAR_EXTRACT8_2_MASK) << 48);
@@ -244,14 +244,14 @@ void prepare_bwt_decode(BWTDecode *decode_info) {
                 // const u_int32_t g_accum_sum = (accum_sums[2] & 0xFFFF0000) >> 16;
                 // const u_int32_t t_accum_sum = (accum_sums[0] & 0xFFFF0000) >> 16;
                 const __m128i accum_sums = mm256_hadd_epi8_4_128(a_accum, c_accum, g_accum, t_accum);
-                // const u_int32_t a_accum_sum = _mm_extract_epi32(accum_sums, 0);
-                // const u_int32_t c_accum_sum = _mm_extract_epi32(accum_sums, 1);
-                // const u_int32_t g_accum_sum = _mm_extract_epi32(accum_sums, 2);
-                // const u_int32_t t_accum_sum = _mm_extract_epi32(accum_sums, 3);
-                const u_int32_t a_accum_sum = (u_int32_t)(accum_sums[0]);
-                const u_int32_t c_accum_sum = (u_int32_t)(accum_sums[0] >> 32);
-                const u_int32_t g_accum_sum = (u_int32_t)(accum_sums[1]);
-                const u_int32_t t_accum_sum = (u_int32_t)(accum_sums[1] >> 32);
+                const u_int32_t a_accum_sum = (u_int32_t)_mm_extract_epi32(accum_sums, 0);
+                const u_int32_t c_accum_sum = (u_int32_t)_mm_extract_epi32(accum_sums, 1);
+                const u_int32_t g_accum_sum = (u_int32_t)_mm_extract_epi32(accum_sums, 2);
+                const u_int32_t t_accum_sum = (u_int32_t)_mm_extract_epi32(accum_sums, 3);
+                // const u_int32_t a_accum_sum = (u_int32_t)(accum_sums[0]);
+                // const u_int32_t c_accum_sum = (u_int32_t)(accum_sums[0] >> 32);
+                // const u_int32_t g_accum_sum = (u_int32_t)(accum_sums[1]);
+                // const u_int32_t t_accum_sum = (u_int32_t)(accum_sums[1] >> 32);
 
 #ifdef DEBUG
                 fprintf(stderr, "accum sums %u %u %u %u\n",
@@ -491,15 +491,14 @@ static inline char get_char_rank(const unsigned index, BWTDecode *decode_info, u
     tempRunCount[LANGUAGE[4]] = decode_info->rankTable[snapshot_page_index].snapshot.d_entry.val >> 8;
     // clock_t t = clock();
     // Fill out char counts for this page
-    unsigned char_index = snapshot_page_index * TABLE_SIZE - (direction == 1 ? 0 : 1);
+    const unsigned char_index = snapshot_page_index * TABLE_SIZE - (direction == 1 ? 0 : 1);
 #ifdef DEBUG
     int rank_entry_index = (char_index & 0b11);
     unsigned rank_index = (char_index - page_index * TABLE_SIZE) / RANK_ENTRY_SIZE;
 #endif
-    if (__glibc_unlikely(direction == 1 &&
-         char_index <= decode_info->endingCharIndex && decode_info->endingCharIndex < index))
+    if (__glibc_unlikely(char_index <= decode_info->endingCharIndex && decode_info->endingCharIndex < index))
         --tempRunCount['C'];
-    else if(__glibc_unlikely(index < decode_info->endingCharIndex && decode_info->endingCharIndex <= char_index)) {
+    else if(__glibc_unlikely(index <= decode_info->endingCharIndex && decode_info->endingCharIndex <= char_index)) {
         ++tempRunCount['C'];
     }
 
@@ -510,13 +509,13 @@ static inline char get_char_rank(const unsigned index, BWTDecode *decode_info, u
     const unsigned char_page_index = index - page_index * TABLE_SIZE;
     const unsigned char symbol_language_char = (unsigned char) _bextr_u64(
             decode_info->rankTable[page_index].symbol_array.int_val, char_page_index*2, 2);
-    const unsigned out_char = SYMBOL_ARRAY_LANGUAGE[(unsigned)symbol_language_char];
+    const unsigned out_char = SYMBOL_ARRAY_LANGUAGE[symbol_language_char];
     if (direction == 1) {
         const __m64 string_lo = _mm_cvtsi64_m64(
                 (int64_t)_pdep_u64(decode_info->rankTable[page_index].symbol_array.int_val, CHAR_DEPOSIT2_8_MASK));
 
 #ifdef DEBUG
-        const u_int64_t string_lo_masked_debug = _mm_cvtm64_si64(_mm_cmpeq_pi8(string_lo, SYMBOL_ARRAY_LANGUAGE_MASKS[(unsigned)symbol_language_char]));
+        const u_int64_t string_lo_masked_debug = _mm_cvtm64_si64(_mm_cmpeq_pi8(string_lo, SYMBOL_ARRAY_LANGUAGE_MASKS[symbol_language_char]));
         fprintf(stderr, "string mask hi lo  %lx(%lx)\n",
                 string_lo_masked_debug,
                 string_lo_masked_debug << MIN(63, 64-char_page_index*8));
@@ -525,17 +524,17 @@ static inline char get_char_rank(const unsigned index, BWTDecode *decode_info, u
             const unsigned bits_to_shift = 64-char_page_index*8;
             const u_int64_t string_lo_masked =
                 bits_to_shift > 63 ? 0 :
-                    ((u_int64_t)_mm_cvtm64_si64(_mm_cmpeq_pi8(string_lo, SYMBOL_ARRAY_LANGUAGE_MASKS[(unsigned)symbol_language_char]))) << bits_to_shift;
+                    ((u_int64_t)_mm_cvtm64_si64(_mm_cmpeq_pi8(string_lo, SYMBOL_ARRAY_LANGUAGE_MASKS[symbol_language_char]))) << bits_to_shift;
             tempRunCount[out_char] += (u_int32_t)_mm_popcnt_u64(string_lo_masked) / 8;
         } else {
             const __m64 string_hi = _mm_cvtsi64_m64(
                 (int64_t)_pdep_u64(decode_info->rankTable[page_index].symbol_array.int_val >> 16, CHAR_DEPOSIT2_8_MASK));
             const unsigned bits_to_shift = 64-(char_page_index-8)*8;
             const u_int64_t string_lo_masked = (u_int64_t)_mm_cvtm64_si64(_mm_cmpeq_pi8(
-                    string_lo, SYMBOL_ARRAY_LANGUAGE_MASKS[(unsigned)symbol_language_char]));
+                    string_lo, SYMBOL_ARRAY_LANGUAGE_MASKS[symbol_language_char]));
             const u_int64_t string_hi_masked =
                 bits_to_shift > 63 ? 0 :
-                    ((u_int64_t)_mm_cvtm64_si64(_mm_cmpeq_pi8(string_hi, SYMBOL_ARRAY_LANGUAGE_MASKS[(unsigned)symbol_language_char]))) << bits_to_shift;
+                    ((u_int64_t)_mm_cvtm64_si64(_mm_cmpeq_pi8(string_hi, SYMBOL_ARRAY_LANGUAGE_MASKS[symbol_language_char]))) << bits_to_shift;
             tempRunCount[out_char] += (u_int32_t)(
                 (_mm_popcnt_u64(string_lo_masked) + _mm_popcnt_u64(string_hi_masked)) / 8);
         }
@@ -547,25 +546,25 @@ static inline char get_char_rank(const unsigned index, BWTDecode *decode_info, u
             const unsigned bits_to_shift = (char_page_index-24)*8;
             const u_int64_t string_lo_masked =
                 bits_to_shift > 63 ? 0 :
-                    ((u_int64_t)_mm_cvtm64_si64(_mm_cmpeq_pi8(string_lo, SYMBOL_ARRAY_LANGUAGE_MASKS[(unsigned)symbol_language_char]))) >> bits_to_shift;
+                    ((u_int64_t)_mm_cvtm64_si64(_mm_cmpeq_pi8(string_lo, SYMBOL_ARRAY_LANGUAGE_MASKS[symbol_language_char]))) >> bits_to_shift;
             tempRunCount[out_char] -= (u_int32_t)(_mm_popcnt_u64(string_lo_masked) / 8);
 #ifdef DEBUG
-        // const u_int64_t string_lo_masked_debug = _mm_cvtm64_si64(_mm_cmpeq_pi8(string_lo, SYMBOL_ARRAY_LANGUAGE_MASKS[(unsigned)symbol_language_char]));
+        // const u_int64_t string_lo_masked_debug = _mm_cvtm64_si64(_mm_cmpeq_pi8(string_lo, SYMBOL_ARRAY_LANGUAGE_MASKS[symbol_language_char]));
         fprintf(stderr, "string mask bits to shift= %d, hi lo  %lx(%llx >> %lx)\n",
                 bits_to_shift,
                 string_lo_masked,
-                _mm_cvtm64_si64(_mm_cmpeq_pi8(string_lo, SYMBOL_ARRAY_LANGUAGE_MASKS[(unsigned)symbol_language_char])),
-                ((u_int64_t)_mm_cvtm64_si64(_mm_cmpeq_pi8(string_lo, SYMBOL_ARRAY_LANGUAGE_MASKS[(unsigned)symbol_language_char]))) >> bits_to_shift);
+                _mm_cvtm64_si64(_mm_cmpeq_pi8(string_lo, SYMBOL_ARRAY_LANGUAGE_MASKS[symbol_language_char])),
+                ((u_int64_t)_mm_cvtm64_si64(_mm_cmpeq_pi8(string_lo, SYMBOL_ARRAY_LANGUAGE_MASKS[symbol_language_char]))) >> bits_to_shift);
 #endif
         } else {
             const __m64 string_hi = _mm_cvtsi64_m64(
                 (int64_t)_pdep_u64(decode_info->rankTable[page_index].symbol_array.int_val >> 32, CHAR_DEPOSIT2_8_MASK));
             const unsigned bits_to_shift = (char_page_index-16)*8;
             const u_int64_t string_lo_masked = (u_int64_t)_mm_cvtm64_si64(_mm_cmpeq_pi8(
-                    string_lo, SYMBOL_ARRAY_LANGUAGE_MASKS[(unsigned)symbol_language_char]));
+                    string_lo, SYMBOL_ARRAY_LANGUAGE_MASKS[symbol_language_char]));
             const u_int64_t string_hi_masked =
                 bits_to_shift > 63 ? 0 :
-                    ((u_int64_t)_mm_cvtm64_si64(_mm_cmpeq_pi8(string_hi, SYMBOL_ARRAY_LANGUAGE_MASKS[(unsigned)symbol_language_char]))) >> bits_to_shift;
+                    ((u_int64_t)_mm_cvtm64_si64(_mm_cmpeq_pi8(string_hi, SYMBOL_ARRAY_LANGUAGE_MASKS[symbol_language_char]))) >> bits_to_shift;
             tempRunCount[out_char] -= (u_int32_t)
                 ((_mm_popcnt_u64(string_lo_masked) + _mm_popcnt_u64(string_hi_masked)) / 8);
         }

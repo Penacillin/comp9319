@@ -188,18 +188,17 @@ void prepare_bwt_search(BWTSearch *search_info) {
                 // const u_int32_t g_accum_sum = (accum_sums[2] & 0xFFFF0000) >> 16;
                 // const u_int32_t t_accum_sum = (accum_sums[0] & 0xFFFF0000) >> 16;
                 const __m128i accum_sums = mm256_hadd_epi8_4_128(a_accum, c_accum, g_accum, t_accum);
-                // const u_int32_t a_accum_sum = _mm_extract_epi32(accum_sums, 0);
-                // const u_int32_t c_accum_sum = _mm_extract_epi32(accum_sums, 1);
-                // const u_int32_t g_accum_sum = _mm_extract_epi32(accum_sums, 2);
-                // const u_int32_t t_accum_sum = _mm_extract_epi32(accum_sums, 3);
-                const u_int32_t a_accum_sum = (u_int32_t)(accum_sums[0]);
-                const u_int32_t c_accum_sum = (u_int32_t)(accum_sums[0] >> 32);
-                const u_int32_t g_accum_sum = (u_int32_t)(accum_sums[1]);
-                const u_int32_t t_accum_sum = (u_int32_t)(accum_sums[1] >> 32);
+                const u_int32_t a_accum_sum = (u_int32_t)_mm_extract_epi32(accum_sums, 0);
+                const u_int32_t c_accum_sum = (u_int32_t)_mm_extract_epi32(accum_sums, 1);
+                const u_int32_t g_accum_sum = (u_int32_t)_mm_extract_epi32(accum_sums, 2);
+                const u_int32_t t_accum_sum = (u_int32_t)_mm_extract_epi32(accum_sums, 3);
+                // const u_int32_t a_accum_sum = (u_int32_t)(accum_sums[0]);
+                // const u_int32_t c_accum_sum = (u_int32_t)(accum_sums[0] >> 32);
+                // const u_int32_t g_accum_sum = (u_int32_t)(accum_sums[1]);
+                // const u_int32_t t_accum_sum = (u_int32_t)(accum_sums[1] >> 32);
 
                 search_info->rank_table[page_index].int_vector = _mm_add_epi32(
-                        search_info->rank_table[acc_base_page].int_vector,
-                        accum_sums);
+                        search_info->rank_table[acc_base_page].int_vector, accum_sums);
 
                 // search_info->rank_table[page_index].entries.a_entry.val =
                 //     search_info->rank_table[acc_base_page].entries.a_entry.val + a_accum_sum;
