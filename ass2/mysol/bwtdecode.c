@@ -13,6 +13,8 @@
 
 
 #include "vector_utils.h"
+#define MAX(x, y) (((x) > (y)) ? (x) : (y))
+#define MIN(x, y) (((x) < (y)) ? (x) : (y))
 
 #define ENDING_CHAR '\n'
 #define TABLE_SIZE 32
@@ -32,13 +34,13 @@ __m256i G_CHAR_MASK;
 __m256i T_CHAR_MASK;
 __m256i ENDING_CHAR_MASK;
 __m256i ONE_CHAR_MASK;
-const __m128i A_CHAR_MASK_64 = {0x4141414141414141, 0x4141414141414141};
-const __m128i C_CHAR_MASK_64 = {0x4343434343434343u, 0x4343434343434343u};
-const __m128i G_CHAR_MASK_64 = {0x4747474747474747u, 0x4747474747474747u};
-const __m128i T_CHAR_MASK_64 = {0x5454545454545454u, 0x5454545454545454u};
+const __m64 A_CHAR_MASK_64 = {0x00000000u, 0x00000000u};
+const __m64 C_CHAR_MASK_64 = {0x01010101u, 0x01010101u};
+const __m64 G_CHAR_MASK_64 = {0x03030303u, 0x03030303u};
+const __m64 T_CHAR_MASK_64 = {0x02020202u, 0x02020202u};
 
 const unsigned long long CHAR_EXTRACT8_2_MASK = 0x0606060606060606u;
-const unsigned long long CHAR_DEPOSIT2_8_MASK = 0x3333333333333333u;
+const unsigned long long CHAR_DEPOSIT2_8_MASK = 0x0303030303030303u;
 
 #define FALSE 0
 #define TRUE 1
@@ -100,7 +102,9 @@ typedef struct _BWTDecode {
 #define LANGUAGE_SIZE 5
 const unsigned LANGUAGE[LANGUAGE_SIZE] = {'\n', 'A', 'C', 'G', 'T'};
 const unsigned SYMBOL_ARRAY_LANGUAGE[] = {'A', 'C', 'T', 'G'};
-__m128i SYMBOL_ARRAY_LANGUAGE_MASKS[4];
+__m64 SYMBOL_ARRAY_LANGUAGE_MASKS[] = {
+    A_CHAR_MASK_64, C_CHAR_MASK_64, T_CHAR_MASK_64, G_CHAR_MASK_64
+};
 
 static inline unsigned get_char_index(const char c) {
 #ifdef DEBUG
@@ -453,7 +457,7 @@ BWTDecode bwtDecode = {.CTable = {0}};
 static inline char get_char_rank(const unsigned index, BWTDecode *decode_info, unsigned *next_index) {
     const unsigned snapshot_page_index = index / TABLE_SIZE + ((index % TABLE_SIZE > TABLE_SIZE / 2) ? 1 : 0);
     const unsigned page_index = index / TABLE_SIZE;
-    const int direction =  (index % TABLE_SIZE > TABLE_SIZE / 2) ? -1 : 1;
+    const int direction =  (index % TABLE_SIZE < TABLE_SIZE / 2) ? 1 : -1;
     unsigned tempRunCount[128];
     tempRunCount['\n'] = 0;
     // Load in char counts until this page
@@ -480,39 +484,71 @@ static inline char get_char_rank(const unsigned index, BWTDecode *decode_info, u
 #endif
     if (direction == 1) {
         const unsigned char_page_index = index - page_index * TABLE_SIZE;
-        const __m64 string_lo = _mm_cvtsi64_m64(
-                _pdep_u64(decode_info->rankTable[page_index].symbol_array.int_val, CHAR_DEPOSIT2_8_MASK));
-        const __m64 string_hi = _mm_cvtsi64_m64(
-                _pdep_u64(decode_info->rankTable[page_index].symbol_array.int_val >> 16, CHAR_DEPOSIT2_8_MASK));
-        __m128i symbol_string_16 = _mm_setr_epi64(string_lo, string_hi);
         const char symbol_language_char = _bextr_u64(
                 decode_info->rankTable[page_index].symbol_array.int_val, char_page_index*2, 2);
-        out_char = SYMBOL_ARRAY_LANGUAGE[(unsigned)symbol_language_char];        
+        out_char = SYMBOL_ARRAY_LANGUAGE[(unsigned)symbol_language_char];
+        const __m64 string_lo = _mm_cvtsi64_m64(
+                _pdep_u64(decode_info->rankTable[page_index].symbol_array.int_val, CHAR_DEPOSIT2_8_MASK));
 
-        __m128i symbol_out_char_masked = _mm_cmpeq_epi8(
-                symbol_string_16, SYMBOL_ARRAY_LANGUAGE_MASKS[(unsigned)symbol_language_char]);
-
-        _mm_bslli_si128(symbol_out_char_masked, TABLE_SIZE - char_page_index);
-        tempRunCount[out_char] +=
-            (_mm_popcnt_u64(symbol_string_16[0]) + _mm_popcnt_u64(symbol_string_16[1])) / 8;
-    } else {
-        out_char =
-            SYMBOL_ARRAY_LANGUAGE[((decode_info->rankTable[page_index].symbol_array.char_array[rank_index] >> (rank_entry_index*BITS_PER_SYMBOL)) & 0b11)];
-        --tempRunCount[out_char];
-        while(__glibc_likely(char_index > index)) {
-            --rank_entry_index;
-            if (rank_entry_index == -1) {
-                rank_entry_index = RANK_ENTRY_SIZE - 1;
-                --rank_index;
-            }
-            out_char =
-                SYMBOL_ARRAY_LANGUAGE[((decode_info->rankTable[page_index].symbol_array.char_array[rank_index] >> (rank_entry_index*BITS_PER_SYMBOL)) & 0b11)];
-            --tempRunCount[out_char];
-            --char_index;
 #ifdef DEBUG
-            fprintf(stderr, "< %d %c %d\n", char_index, out_char, tempRunCount[out_char]);
+        const u_int64_t string_lo_masked_debug = _mm_cvtm64_si64(_mm_cmpeq_pi8(string_lo, SYMBOL_ARRAY_LANGUAGE_MASKS[(unsigned)symbol_language_char]));
+        fprintf(stderr, "string mask hi lo  %lx(%lx)\n",
+                string_lo_masked_debug,
+                string_lo_masked_debug << MIN(63, 64-char_page_index*8));
 #endif
-        };
+        if (char_page_index < 8) {
+            const unsigned bits_to_shift = 64-char_page_index*8;
+            const u_int64_t string_lo_masked =
+                bits_to_shift > 63 ? 0 :
+                    _mm_cvtm64_si64(_mm_cmpeq_pi8(string_lo, SYMBOL_ARRAY_LANGUAGE_MASKS[(unsigned)symbol_language_char])) << bits_to_shift;
+            tempRunCount[out_char] += _mm_popcnt_u64(string_lo_masked) / 8;
+        } else {
+            const __m64 string_hi = _mm_cvtsi64_m64(
+                _pdep_u64(decode_info->rankTable[page_index].symbol_array.int_val >> 16, CHAR_DEPOSIT2_8_MASK));
+            const unsigned bits_to_shift = 64-(char_page_index-8)*8;
+            const u_int64_t string_lo_masked = _mm_cvtm64_si64(_mm_cmpeq_pi8(
+                    string_lo, SYMBOL_ARRAY_LANGUAGE_MASKS[(unsigned)symbol_language_char]));
+            const u_int64_t string_hi_masked =
+                bits_to_shift > 63 ? 0 :
+                    _mm_cvtm64_si64(_mm_cmpeq_pi8(string_hi, SYMBOL_ARRAY_LANGUAGE_MASKS[(unsigned)symbol_language_char])) << bits_to_shift;
+            tempRunCount[out_char] +=
+                (_mm_popcnt_u64(string_lo_masked) + _mm_popcnt_u64(string_hi_masked)) / 8;
+        }
+    } else { // if direction == -1
+        const unsigned char_page_index = index - page_index * TABLE_SIZE;
+        const char symbol_language_char = _bextr_u64(
+                decode_info->rankTable[page_index].symbol_array.int_val, char_page_index*2, 2);
+        out_char = SYMBOL_ARRAY_LANGUAGE[(unsigned)symbol_language_char];
+        const __m64 string_lo = _mm_cvtsi64_m64(
+                _pdep_u64(decode_info->rankTable[page_index].symbol_array.int_val >> 48, CHAR_DEPOSIT2_8_MASK));
+
+#ifdef DEBUG
+        const u_int64_t string_lo_masked_debug = _mm_cvtm64_si64(_mm_cmpeq_pi8(string_lo, SYMBOL_ARRAY_LANGUAGE_MASKS[(unsigned)symbol_language_char]));
+        fprintf(stderr, "string mask hi lo  %lx(%lx)\n",
+                string_lo_masked_debug,
+                string_lo_masked_debug << MIN(63, 64-char_page_index*8));
+#endif
+        if (char_page_index >= 24) {
+            const unsigned bits_to_shift = (char_page_index-24)*8;
+            const u_int64_t string_lo_masked =
+                bits_to_shift > 63 ? 0 :
+                    _mm_cvtm64_si64(_mm_cmpeq_pi8(string_lo, SYMBOL_ARRAY_LANGUAGE_MASKS[(unsigned)symbol_language_char])) >> bits_to_shift;
+            tempRunCount[out_char] -= _mm_popcnt_u64(string_lo_masked) / 8;
+        } else {
+            const __m64 string_hi = _mm_cvtsi64_m64(
+                _pdep_u64(decode_info->rankTable[page_index].symbol_array.int_val >> 32, CHAR_DEPOSIT2_8_MASK));
+            const unsigned bits_to_shift = (char_page_index-16)*8;
+            const u_int64_t string_lo_masked = _mm_cvtm64_si64(_mm_cmpeq_pi8(
+                    string_lo, SYMBOL_ARRAY_LANGUAGE_MASKS[(unsigned)symbol_language_char]));
+            const u_int64_t string_hi_masked =
+                bits_to_shift > 63 ? 0 :
+                    _mm_cvtm64_si64(_mm_cmpeq_pi8(string_hi, SYMBOL_ARRAY_LANGUAGE_MASKS[(unsigned)symbol_language_char])) >> bits_to_shift;
+            tempRunCount[out_char] -=
+                (_mm_popcnt_u64(string_lo_masked) + _mm_popcnt_u64(string_hi_masked)) / 8;
+        }
+#ifdef DEBUG
+        fprintf(stderr, "< %d %c %d\n", char_index, out_char, tempRunCount[out_char]);
+#endif
     }
     // reader_timer += ((double)clock() - t)/CLOCKS_PER_SEC;
     *next_index = tempRunCount[out_char] + decode_info->CTable[out_char];
