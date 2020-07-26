@@ -286,7 +286,7 @@ void prepare_bwt_decode(BWTDecode *decode_info) {
                     } while (backward_iter < TABLE_SIZE/CHAR_COUNT_STEP);
 #ifdef PERF
                     fprintf(stderr, "find end char took %f seconds to execute %d \n",
-                             ((double)clock() - t)/CLOCKS_PER_SEC, decode_info->endingCharIndex);
+                             (double)(clock() - t)/CLOCKS_PER_SEC, decode_info->endingCharIndex);
 #endif
                 }
 

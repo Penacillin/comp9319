@@ -243,7 +243,7 @@ void prepare_bwt_search(BWTSearch *search_info) {
                     } while (backward_iter < PAGE_SIZE/CHAR_COUNT_STEP);
 #ifdef PERF
                     fprintf(stderr, "find end char took %f seconds to execute %d \n",
-                             ((double)clock() - t)/CLOCKS_PER_SEC, search_info->ending_char_index);
+                             (double)(clock() - t)/CLOCKS_PER_SEC, search_info->ending_char_index);
 #endif
                 }
 #ifdef DEBUG
@@ -583,7 +583,7 @@ int main(int argc, char *argv[]) {
 #endif
     prepare_bwt_search(&bwt_search);
 #ifdef PERF
-    fprintf(stderr, "build_tables() took %f seconds to execute \n", ((double)clock() - t)/CLOCKS_PER_SEC);
+    fprintf(stderr, "build_tables() took %f seconds to execute \n", (double)(clock() - t)/CLOCKS_PER_SEC);
 #endif
 
 #ifdef DEBUG
