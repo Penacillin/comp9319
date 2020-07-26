@@ -32,7 +32,13 @@ __m256i G_CHAR_MASK;
 __m256i T_CHAR_MASK;
 __m256i ENDING_CHAR_MASK;
 __m256i ONE_CHAR_MASK;
+const __m128i A_CHAR_MASK_64 = {0x4141414141414141, 0x4141414141414141};
+const __m128i C_CHAR_MASK_64 = {0x4343434343434343u, 0x4343434343434343u};
+const __m128i G_CHAR_MASK_64 = {0x4747474747474747u, 0x4747474747474747u};
+const __m128i T_CHAR_MASK_64 = {0x5454545454545454u, 0x5454545454545454u};
+
 const unsigned long long CHAR_EXTRACT8_2_MASK = 0x0606060606060606u;
+const unsigned long long CHAR_DEPOSIT2_8_MASK = 0x3333333333333333u;
 
 #define FALSE 0
 #define TRUE 1
@@ -94,6 +100,7 @@ typedef struct _BWTDecode {
 #define LANGUAGE_SIZE 5
 const unsigned LANGUAGE[LANGUAGE_SIZE] = {'\n', 'A', 'C', 'G', 'T'};
 const unsigned SYMBOL_ARRAY_LANGUAGE[] = {'A', 'C', 'T', 'G'};
+__m128i SYMBOL_ARRAY_LANGUAGE_MASKS[4];
 
 static inline unsigned get_char_index(const char c) {
 #ifdef DEBUG
@@ -472,21 +479,21 @@ static inline char get_char_rank(const unsigned index, BWTDecode *decode_info, u
              page_index, char_index, rank_index, rank_entry_index);
 #endif
     if (direction == 1) {
-        out_char =
-            SYMBOL_ARRAY_LANGUAGE[((decode_info->rankTable[page_index].symbol_array.char_array[rank_index] >> (rank_entry_index*BITS_PER_SYMBOL)) & 0b11)];
-        ++tempRunCount[out_char];
-        while(__glibc_likely(char_index < index)) {
-            ++rank_entry_index;
-            if (rank_entry_index == RANK_ENTRY_SIZE) {
-                rank_entry_index = 0;
-                ++rank_index;
-            }
-            out_char =
-                SYMBOL_ARRAY_LANGUAGE[((decode_info->rankTable[page_index].symbol_array.char_array[rank_index] >> (rank_entry_index*BITS_PER_SYMBOL)) & 0b11)];
-            ++tempRunCount[out_char];
-            ++char_index;
-        };
-        --tempRunCount[out_char];
+        const unsigned char_page_index = index - page_index * TABLE_SIZE;
+        const __m64 string_lo = _mm_cvtsi64_m64(
+                _pdep_u64(decode_info->rankTable[page_index].symbol_array.int_val, CHAR_DEPOSIT2_8_MASK));
+        const __m64 string_hi = _mm_cvtsi64_m64(
+                _pdep_u64(decode_info->rankTable[page_index].symbol_array.int_val >> 16, CHAR_DEPOSIT2_8_MASK));
+        __m128i symbol_string_16 = _mm_setr_epi64(string_lo, string_hi);
+        const char symbol_language_char = _mm_bsrli_si128(symbol_string_16, char_page_index)[0] & 0xFF;
+        out_char = SYMBOL_ARRAY_LANGUAGE[(unsigned)symbol_language_char];        
+
+        __m128i symbol_out_char_masked = _mm_cmpeq_epi8(
+                symbol_string_16, SYMBOL_ARRAY_LANGUAGE_MASKS[(unsigned)symbol_language_char]);
+
+        _mm_bslli_si128(symbol_out_char_masked, TABLE_SIZE - char_page_index);
+        tempRunCount[out_char] +=
+            (_mm_popcnt_u64(symbol_string_16[0]) + _mm_popcnt_u64(symbol_string_16[1])) / 8;
     } else {
         out_char =
             SYMBOL_ARRAY_LANGUAGE[((decode_info->rankTable[page_index].symbol_array.char_array[rank_index] >> (rank_entry_index*BITS_PER_SYMBOL)) & 0b11)];
