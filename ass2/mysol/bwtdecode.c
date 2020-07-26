@@ -373,7 +373,7 @@ void prepare_bwt_decode(BWTDecode *decode_info) {
         }
     }
 #ifdef DEBUG
-    printf("accums: a=%d,c=%d,g=%d,t=%d\n",
+    fprintf(stderr, "accums: a=%d,c=%d,g=%d,t=%d\n",
             mm256_hadd_epi8(a_accum),
             mm256_hadd_epi8(c_accum),
             mm256_hadd_epi8(g_accum),
@@ -426,7 +426,7 @@ void prepare_bwt_decode(BWTDecode *decode_info) {
 
 void print_ctable(const BWTDecode *decode_info) {
     for (unsigned i = 0; i < 5; ++i) {
-        printf("%c: %d\n", LANGUAGE[i], decode_info->CTable[(unsigned)LANGUAGE[i]]);
+        fprintf(stderr, "%c: %d\n", LANGUAGE[i], decode_info->CTable[(unsigned)LANGUAGE[i]]);
     }
 }
 
@@ -438,7 +438,7 @@ void print_ranktable(const BWTDecode *decode_info) {
         fprintf(stderr, "%d(page=%d,rank=%d,entry=%d) >%c<\n", i, page_index, rank_index, rank_entry_index,
             SYMBOL_ARRAY_LANGUAGE[((decode_info->rankTable[page_index].symbol_array.char_array[rank_index] >> (rank_entry_index*BITS_PER_SYMBOL)) & 0b11)]);
     }
-    printf("%d is endchar\n", decode_info->endingCharIndex);
+    fprintf(stderr, "%d is endchar\n", decode_info->endingCharIndex);
 }
 
 void print_cumtable(const BWTDecode *decode_info) {
@@ -558,7 +558,7 @@ static inline char get_char_rank(const unsigned index, BWTDecode *decode_info, u
     // reader_timer += ((double)clock() - t)/CLOCKS_PER_SEC;
     *next_index = tempRunCount[out_char] + decode_info->CTable[out_char];
 #ifdef DEBUG
-    printf("%c %d %d\n", out_char, tempRunCount[out_char], decode_info->CTable[out_char]);
+    fprintf(stderr, "%c %d %d\n", out_char, tempRunCount[out_char], decode_info->CTable[out_char]);
 #endif
     return (char)out_char;
 }
