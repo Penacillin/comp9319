@@ -12,5 +12,6 @@ do
     res=$(diff ./outputs/$file_basename.out.ref ./outputs/$file_basename.out)
     if [[ $res != "" ]]; then
         echo "MISMAATCH"
+        exit 1
     fi
 done
