@@ -407,7 +407,7 @@ void prepare_bwt_decode(BWTDecode *decode_info) {
             if (in_buffer[backward_iter] == ENDING_CHAR) {
                 decode_info->endingCharIndex = curr_index - (u_int32_t)(i - backward_iter);
 #ifdef DEBUG
-                fprintf(stderr, "Found ending char index in remainder %d\n", backward_iter);
+                fprintf(stderr, "Found ending char index in remainder %ld\n", backward_iter);
 #endif
                 break;
             }
@@ -515,12 +515,13 @@ static inline char get_char_rank(const unsigned index, BWTDecode *decode_info, u
                 (int64_t)_pdep_u64(decode_info->rankTable[page_index].symbol_array.int_val, CHAR_DEPOSIT2_8_MASK));
 
 #ifdef DEBUG
-        const u_int64_t string_lo_masked_debug = _mm_cvtm64_si64(_mm_cmpeq_pi8(string_lo, SYMBOL_ARRAY_LANGUAGE_MASKS[symbol_language_char]));
+        const u_int64_t string_lo_masked_debug = (u_int64_t)_mm_cvtm64_si64(_mm_cmpeq_pi8(string_lo, SYMBOL_ARRAY_LANGUAGE_MASKS[symbol_language_char]));
         fprintf(stderr, "string mask hi lo  %lx(%lx)\n",
                 string_lo_masked_debug,
                 string_lo_masked_debug << MIN(63, 64-char_page_index*8));
 #endif
         if (char_page_index < 8) {
+            // if (__glibc_unlikely(char_page_index == 0)) goto FINISHED_UPDATING_SNAPSHOT;
             const unsigned bits_to_shift = 64-char_page_index*8;
             const u_int64_t string_lo_masked =
                 bits_to_shift > 63 ? 0 :
@@ -572,6 +573,7 @@ static inline char get_char_rank(const unsigned index, BWTDecode *decode_info, u
         fprintf(stderr, "< %d %c %d\n", char_index, out_char, tempRunCount[out_char]);
 #endif
     }
+// FINISHED_UPDATING_SNAPSHOT:
     // reader_timer += ((double)clock() - t)/CLOCKS_PER_SEC;
     *next_index = tempRunCount[out_char] + decode_info->CTable[out_char];
 #ifdef DEBUG
