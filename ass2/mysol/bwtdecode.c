@@ -321,7 +321,10 @@ void prepare_bwt_decode(BWTDecode *decode_info) {
                 ++page_index;
             }
         }
+        // Only fill out whole pages until here
         unsigned rank_index = 0;
+        // Clear out page ready to input symbols
+        decode_info->rankTable[page_index-1].symbol_array.int_val = 0;
         for (;i < k; ++rank_index) {
             // Clear out page ready to input symbols
             decode_info->rankTable[page_index-1].symbol_array.char_array[rank_index] = 0;
@@ -368,10 +371,19 @@ void prepare_bwt_decode(BWTDecode *decode_info) {
                     }
                     ++page_index;
                     rank_index = 0;
+                    decode_info->rankTable[page_index-1].symbol_array.int_val = 0;
                 }
             }
         }
+        // // Fill remaining chars in page with 'A'
+        // if (__glibc_unlikely(rank_index != 0 && rank_index < (TABLE_SIZE/RANK_ENTRY_SIZE))) {
+        //     for (;rank_index < (TABLE_SIZE/RANK_ENTRY_SIZE); ++rank_index) {
+        //         decode_info->rankTable[page_index-1].symbol_array.char_array[rank_index] = 0;
+        //     }
+        // }
     }
+
+
 #ifdef DEBUG
     fprintf(stderr, "accums: a=%d,c=%d,g=%d,t=%d\n",
             mm256_hadd_epi8(a_accum),
@@ -420,8 +432,14 @@ void prepare_bwt_decode(BWTDecode *decode_info) {
         decode_info->CTable[LANGUAGE[3]] + (decode_info->rankTable[page_index].snapshot.c_entry.val & RUN_COUNT_LOWER_MASK);
 
     decode_info->rankTableSize = curr_index;
-}
 
+    // Fix up last snapshot to count trailing 'A's
+    const unsigned prev_a_total =
+        decode_info->rankTable[page_index].snapshot.a_entry.val & RUN_COUNT_LOWER_MASK;
+    decode_info->rankTable[page_index].snapshot.a_entry.val &= 0xFF000000; // zero out A
+    decode_info->rankTable[page_index].snapshot.a_entry.val |=
+        prev_a_total + (TABLE_SIZE - (curr_index % TABLE_SIZE));
+}
 
 
 void print_ctable(const BWTDecode *decode_info) {
@@ -429,6 +447,7 @@ void print_ctable(const BWTDecode *decode_info) {
         fprintf(stderr, "%c: %d\n", LANGUAGE[i], decode_info->CTable[(unsigned)LANGUAGE[i]]);
     }
 }
+
 
 void print_ranktable(const BWTDecode *decode_info) {
     for (unsigned i = 0; i < decode_info->rankTableSize; ++i) {
@@ -442,11 +461,21 @@ void print_ranktable(const BWTDecode *decode_info) {
 }
 
 void print_cumtable(const BWTDecode *decode_info) {
+    fprintf(stderr, "Num pages %u \n", decode_info->rankTableSize / TABLE_SIZE);
     for (unsigned i = 0; i < 3; ++i) {
         fprintf(stderr, "%u,", decode_info->rankTable[i].snapshot.a_entry.val & RUN_COUNT_LOWER_MASK);
         fprintf(stderr, "%u,", decode_info->rankTable[i].snapshot.b_entry.val & RUN_COUNT_LOWER_MASK);
         fprintf(stderr, "%u,", decode_info->rankTable[i].snapshot.c_entry.val & RUN_COUNT_LOWER_MASK);
         fprintf(stderr, "%u,", decode_info->rankTable[i].snapshot.d_entry.val >> 8);
+        fprintf(stderr, "\n");
+    }
+
+    for (unsigned last_page_index = decode_info->rankTableSize / TABLE_SIZE - 1;
+            last_page_index < decode_info->rankTableSize / TABLE_SIZE + 3; ++last_page_index) {
+        fprintf(stderr, "%u,", decode_info->rankTable[last_page_index].snapshot.a_entry.val & RUN_COUNT_LOWER_MASK);
+        fprintf(stderr, "%u,", decode_info->rankTable[last_page_index].snapshot.b_entry.val & RUN_COUNT_LOWER_MASK);
+        fprintf(stderr, "%u,", decode_info->rankTable[last_page_index].snapshot.c_entry.val & RUN_COUNT_LOWER_MASK);
+        fprintf(stderr, "%u,", decode_info->rankTable[last_page_index].snapshot.d_entry.val >> 8);
         fprintf(stderr, "\n");
     }
 }
