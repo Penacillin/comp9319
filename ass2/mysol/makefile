@@ -1,5 +1,5 @@
 CXX=gcc
-CFLAGS=-Wextra -Wall -Werror -Wconversion --std=c11 -march=haswell -mvzeroupper
+CFLAGS=-Wextra -Wall -Wconversion -Winline -Wshadow -Wduplicated-cond -Wduplicated-branches --std=c11 -march=haswell -mvzeroupper
 LDFLAGS=-lrt
 
 default: CFLAGS += -O3
