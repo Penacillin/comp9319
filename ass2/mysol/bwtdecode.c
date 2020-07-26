@@ -375,12 +375,6 @@ void prepare_bwt_decode(BWTDecode *decode_info) {
                 }
             }
         }
-        // // Fill remaining chars in page with 'A'
-        // if (__glibc_unlikely(rank_index != 0 && rank_index < (TABLE_SIZE/RANK_ENTRY_SIZE))) {
-        //     for (;rank_index < (TABLE_SIZE/RANK_ENTRY_SIZE); ++rank_index) {
-        //         decode_info->rankTable[page_index-1].symbol_array.char_array[rank_index] = 0;
-        //     }
-        // }
     }
 
 
@@ -502,11 +496,10 @@ static inline char get_char_rank(const unsigned index, BWTDecode *decode_info, u
     int rank_entry_index = (char_index & 0b11);
     unsigned rank_index = (char_index - page_index * TABLE_SIZE) / RANK_ENTRY_SIZE;
 #endif
-    unsigned out_char;
     if (__glibc_unlikely(direction == 1 &&
          char_index <= decode_info->endingCharIndex && decode_info->endingCharIndex < index))
         --tempRunCount['C'];
-    else if(__glibc_unlikely(index <= decode_info->endingCharIndex && decode_info->endingCharIndex <= char_index)) {
+    else if(__glibc_unlikely(index < decode_info->endingCharIndex && decode_info->endingCharIndex <= char_index)) {
         ++tempRunCount['C'];
     }
 
@@ -514,11 +507,11 @@ static inline char get_char_rank(const unsigned index, BWTDecode *decode_info, u
     fprintf(stderr, "Using page %d. char_index %d, rank_index %d, rank_entry %d\n",
              page_index, char_index, rank_index, rank_entry_index);
 #endif
+    const unsigned char_page_index = index - page_index * TABLE_SIZE;
+    const char symbol_language_char = _bextr_u64(
+            decode_info->rankTable[page_index].symbol_array.int_val, char_page_index*2, 2);
+    const unsigned out_char = SYMBOL_ARRAY_LANGUAGE[(unsigned)symbol_language_char];
     if (direction == 1) {
-        const unsigned char_page_index = index - page_index * TABLE_SIZE;
-        const char symbol_language_char = _bextr_u64(
-                decode_info->rankTable[page_index].symbol_array.int_val, char_page_index*2, 2);
-        out_char = SYMBOL_ARRAY_LANGUAGE[(unsigned)symbol_language_char];
         const __m64 string_lo = _mm_cvtsi64_m64(
                 _pdep_u64(decode_info->rankTable[page_index].symbol_array.int_val, CHAR_DEPOSIT2_8_MASK));
 
@@ -547,10 +540,6 @@ static inline char get_char_rank(const unsigned index, BWTDecode *decode_info, u
                 (_mm_popcnt_u64(string_lo_masked) + _mm_popcnt_u64(string_hi_masked)) / 8;
         }
     } else { // if direction == -1
-        const unsigned char_page_index = index - page_index * TABLE_SIZE;
-        const char symbol_language_char = _bextr_u64(
-                decode_info->rankTable[page_index].symbol_array.int_val, char_page_index*2, 2);
-        out_char = SYMBOL_ARRAY_LANGUAGE[(unsigned)symbol_language_char];
         const __m64 string_lo = _mm_cvtsi64_m64(
                 _pdep_u64(decode_info->rankTable[page_index].symbol_array.int_val >> 48, CHAR_DEPOSIT2_8_MASK));
 
