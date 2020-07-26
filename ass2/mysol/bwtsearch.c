@@ -27,8 +27,8 @@ const unsigned LANGUAGE[] = {'\n', 'A', 'C', 'G', 'T', 'U'};
 #define SYMBOLS_PER_CHAR 4
 #define BITS_PER_SYMBOL 2
 #define PAGE_SIZE 256
-#define UNCACHED_PAGE 255
-#define PAGE_CACHE_SIZE 128
+#define UNCACHED_PAGE 65535
+#define PAGE_CACHE_SIZE 32768
 #define RANK_TABLE_SIZE (MAX_INPUT_SIZE/PAGE_SIZE)
 
 #define FALSE 0
@@ -72,9 +72,9 @@ typedef struct _BWTSearch {
     u_int32_t ending_char_index;
     u_int32_t CTable[128];
 
-    unsigned char cache_clock;
+    u_int16_t cache_clock;
     u_int32_t cache_to_page[PAGE_CACHE_SIZE];
-    unsigned char page_to_cache[RANK_TABLE_SIZE + 1];
+    u_int16_t page_to_cache[RANK_TABLE_SIZE + 1];
 
     int bwt_file_fd;
 } BWTSearch;
@@ -143,13 +143,14 @@ void prepare_bwt_search(BWTSearch *search_info) {
     char end_char_found = FALSE;
     char __attribute__((aligned (32))) in_buffer[INPUT_BUF_SIZE];
 
-    memset(search_info->page_to_cache, UNCACHED_PAGE, sizeof(search_info->page_to_cache));
+    // memset(search_info->page_to_cache, UNCACHED_PAGE, sizeof(search_info->page_to_cache));
 
     // First snapshot starting state
     search_info->rank_table[page_index].entries.a_entry.val = 0;
     search_info->rank_table[page_index].entries.b_entry.val = 0;
     search_info->rank_table[page_index].entries.c_entry.val = 0;
     search_info->rank_table[page_index].entries.d_entry.val = 0;
+    search_info->page_to_cache[page_index] = UNCACHED_PAGE;
     ++page_index;
 
     __m256i a_accum = _mm256_set1_epi8(0); 
@@ -255,14 +256,14 @@ void prepare_bwt_search(BWTSearch *search_info) {
 #endif
                 // TODO: only need to do this when 255 per position max (32 accumulators, 8 per page, 256/8=32 pages)
                 // only have to set every 32 pages
-                if (page_index > acc_base_page + 7) {
+                if (__glibc_unlikely(page_index > acc_base_page + 7)) {
                     a_accum = _mm256_set1_epi8(0); 
                     c_accum = _mm256_set1_epi8(0); 
                     g_accum = _mm256_set1_epi8(0); 
                     t_accum = _mm256_set1_epi8(0);
                     acc_base_page = page_index;
                 }
-
+                search_info->page_to_cache[page_index] = UNCACHED_PAGE;
                 ++page_index;
             }
         }
@@ -351,15 +352,19 @@ void prepare_bwt_search(BWTSearch *search_info) {
         search_info->CTable[LANGUAGE[4]] + search_info->rank_table[page_index].entries.d_entry.val;
 
     search_info->rank_table_size = curr_index;
+
+    // Fix up last snapshot to count trailing 'A's
+    search_info->rank_table[page_index].entries.a_entry.val +=
+        (PAGE_SIZE - (curr_index % PAGE_SIZE));
 }
+
 
 #ifdef PERF
 unsigned long long cache_hits = 0;
 unsigned long long cache_misses = 0;
 #endif
 
-unsigned char get_cache_for_index(BWTSearch *search_info, const unsigned index) {
-    const unsigned page_index = index / PAGE_SIZE;
+unsigned char get_cache_for_index(BWTSearch *search_info, const unsigned page_index) {
     if (search_info->page_to_cache[page_index] != UNCACHED_PAGE) {
 #ifdef PERF
         ++cache_hits;
@@ -401,13 +406,13 @@ unsigned char get_cache_for_index(BWTSearch *search_info, const unsigned index) 
 }
 
 unsigned get_occurence(BWTSearch *search_info, const char c, const size_t index) {
-    const unsigned char cache_index = get_cache_for_index(search_info, index);
-
-    // const unsigned snapshot_page_index = index / PAGE_SIZE + ((index % PAGE_SIZE > PAGE_SIZE / 2) ? 1 : 0);
-    const unsigned snapshot_page_index = index / PAGE_SIZE;
     const unsigned page_index = index / PAGE_SIZE;
-    // const int direction =  (index % PAGE_SIZE > PAGE_SIZE / 2) ? -1 : 1;
-    const int direction =  1;
+    const unsigned char cache_index = get_cache_for_index(search_info, page_index);
+
+    const unsigned snapshot_page_index = index / PAGE_SIZE + ((index % PAGE_SIZE > PAGE_SIZE / 2) ? 1 : 0);
+    // const unsigned snapshot_page_index = index / PAGE_SIZE;
+    const int direction =  (index % PAGE_SIZE > PAGE_SIZE / 2) ? -1 : 1;
+    // const int direction =  1;
     unsigned tempRunCount[128];
     tempRunCount['\n'] = 0;
     // Load in char counts until this page
@@ -429,8 +434,8 @@ unsigned get_occurence(BWTSearch *search_info, const char c, const size_t index)
     }
 
 #ifdef DEBUG
-    fprintf(stderr, "index %ld, Using page %d. char_index %d, rank_index %d, rank_entry %d\n",
-             index, page_index, char_index, rank_index, rank_entry_index);
+    fprintf(stderr, "index %ld, Using page %d snapshot page %d. char_index %d, rank_index %d, rank_entry %d\n",
+             index, page_index, snapshot_page_index, char_index, rank_index, rank_entry_index);
 #endif
     if (direction == 1) {
         while(__glibc_likely(char_index <= index)) {
@@ -501,9 +506,9 @@ int process_search_query(BWTSearch *search_info,
 }
 
 void read_search_queries(BWTSearch *search_info) {
-    char query_buf[QUERY_MAX_SIZE + 1];
+    char query_buf[QUERY_MAX_SIZE + 2];
     ssize_t query_size;
-    while(fgets(query_buf, QUERY_MAX_SIZE, stdin) != NULL) {
+    while(fgets(query_buf, QUERY_MAX_SIZE+1, stdin) != NULL) {
         query_size = strlen(query_buf);
         const int num_matches = process_search_query(search_info, query_buf, query_size - 1);
         printf("%d\n", num_matches);

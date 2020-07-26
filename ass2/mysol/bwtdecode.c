@@ -249,7 +249,7 @@ void prepare_bwt_decode(BWTDecode *decode_info) {
                 // const u_int32_t g_accum_sum = _mm_extract_epi32(accum_sums, 2);
                 // const u_int32_t t_accum_sum = _mm_extract_epi32(accum_sums, 3);
                 const u_int32_t a_accum_sum = accum_sums[0];
-                u_int32_t c_accum_sum = accum_sums[0] >> 32;
+                const u_int32_t c_accum_sum = accum_sums[0] >> 32;
                 const u_int32_t g_accum_sum = accum_sums[1];
                 const u_int32_t t_accum_sum = accum_sums[1] >> 32;
 
@@ -319,7 +319,7 @@ void prepare_bwt_decode(BWTDecode *decode_info) {
                 }
 
                 ++page_index;
-            }
+            } // snapshot rank table
         }
         // Only fill out whole pages until here
         unsigned rank_index = 0;

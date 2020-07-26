@@ -14,3 +14,16 @@ do
         echo "MISMAATCH"
     fi
 done
+
+echo "RANDOM INPUT"
+rm -f ./inputs/random.input
+for i in 1 5 10 12 20 25 30 40 50 55 60 70 90 100; do
+    tr -dc "ACGT" < /dev/urandom | head -c$i >> ./inputs/random.input
+    printf "\n" >> ./inputs/random.input
+done
+time ./$REFERENCE_SOLUTION ./data/dna-100MB.bwt < ./inputs/random.input > ./outputs/random.output.ref
+time ./$MY_SOL ./data/dna-100MB.bwt < ./inputs/random.input > ./outputs/random.output
+res=$(diff ./outputs/random.output.ref ./outputs/random.output)
+if [[ $res != "" ]]; then
+    echo "MISMAATCH"
+fi
