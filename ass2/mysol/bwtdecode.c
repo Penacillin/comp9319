@@ -173,21 +173,6 @@ off_t open_input_file(BWTDecode* decode_info, char *bwt_file_path) {
 }
 
 
-void my_bswap64(u_int64_t value, void* dest)
-{
-  value =
-      ((value & 0xFF00000000000000u) >> 56u) |
-      ((value & 0x00FF000000000000u) >> 40u) |
-      ((value & 0x0000FF0000000000u) >> 24u) |
-      ((value & 0x000000FF00000000u) >>  8u) |
-      ((value & 0x00000000FF000000u) <<  8u) |      
-      ((value & 0x0000000000FF0000u) << 24u) |
-      ((value & 0x000000000000FF00u) << 40u) |
-      ((value & 0x00000000000000FFu) << 56u);
-  memcpy(dest, &value, sizeof(u_int64_t));
-}
-
-
 void prepare_bwt_decode(BWTDecode *decode_info) {
     ssize_t k;
     unsigned curr_index = 0;
@@ -224,7 +209,6 @@ void prepare_bwt_decode(BWTDecode *decode_info) {
             g_accum = _mm256_sub_epi8(g_accum, _mm256_cmpeq_epi8(*(const __m256i*)(in_buffer + i), G_CHAR_MASK));
             t_accum = _mm256_sub_epi8(t_accum, _mm256_cmpeq_epi8(*(const __m256i*)(in_buffer + i), T_CHAR_MASK));
             // _mm_prefetch((void*)(in_buffer + i + CHAR_COUNT_STEP), _MM_HINT_T2);
-
             const u_int64_t string_2bit_chars = _pext_u64(
                     *(unsigned long long*)(in_buffer+i), CHAR_EXTRACT8_2_MASK) | 
                     (_pext_u64(*(unsigned long long*)(in_buffer+i+8), CHAR_EXTRACT8_2_MASK) << 16) | 
@@ -314,7 +298,7 @@ void prepare_bwt_decode(BWTDecode *decode_info) {
 #endif
                 // TODO: only need to do this when 255 per position max (32 accumulators, 8 per page, 256/8=32 pages)
                 // only have to set every 32 pages
-                if (page_index > acc_base_page + 7) {
+                if (__glibc_unlikely(page_index > acc_base_page + 7)) {
                     a_accum = _mm256_set1_epi8(0); 
                     c_accum = _mm256_set1_epi8(0); 
                     g_accum = _mm256_set1_epi8(0); 
@@ -345,18 +329,31 @@ void prepare_bwt_decode(BWTDecode *decode_info) {
                 if (__glibc_unlikely(curr_index % TABLE_SIZE == 0)) {
                     // assert(page_index < PAGE_TABLE_SIZE);
                     fprintf(stderr, "WARNING: Incorrectly snapshoting\n");
+                    const __m128i accum_sums = mm256_hadd_epi8_4_128(a_accum, c_accum, g_accum, t_accum);
+                    const u_int32_t a_accum_sum = accum_sums[0];
+                    const u_int32_t c_accum_sum = accum_sums[0] >> 32;
+                    const u_int32_t g_accum_sum = accum_sums[1];
+                    const u_int32_t t_accum_sum = accum_sums[1] >> 32;
                     decode_info->rankTable[page_index].snapshot.a_entry.val = 
-                        (decode_info->rankTable[acc_base_page].snapshot.a_entry.val & RUN_COUNT_LOWER_MASK) + tempRunCount[LANGUAGE[1]];
+                        (decode_info->rankTable[acc_base_page].snapshot.a_entry.val & RUN_COUNT_LOWER_MASK) + a_accum_sum + tempRunCount[LANGUAGE[1]];
                     decode_info->rankTable[page_index].snapshot.b_entry.val |=
-                         (decode_info->rankTable[acc_base_page].snapshot.b_entry.val & RUN_COUNT_LOWER_MASK) + tempRunCount[LANGUAGE[2]];
+                         (decode_info->rankTable[acc_base_page].snapshot.b_entry.val & RUN_COUNT_LOWER_MASK) + c_accum_sum + tempRunCount[LANGUAGE[2]];
                     decode_info->rankTable[page_index].snapshot.c_entry.val |=
-                         (decode_info->rankTable[acc_base_page].snapshot.c_entry.val & RUN_COUNT_LOWER_MASK) + tempRunCount[LANGUAGE[3]];
+                         (decode_info->rankTable[acc_base_page].snapshot.c_entry.val & RUN_COUNT_LOWER_MASK) + g_accum_sum + tempRunCount[LANGUAGE[3]];
                     decode_info->rankTable[page_index].snapshot.d_entry.val |=
-                         (((decode_info->rankTable[acc_base_page].snapshot.d_entry.val & RUN_COUNT_UPPER_MASK) >> 8) + tempRunCount[LANGUAGE[4]]) << 8;
+                         (((decode_info->rankTable[acc_base_page].snapshot.d_entry.val & RUN_COUNT_UPPER_MASK) >> 8) + t_accum_sum + tempRunCount[LANGUAGE[4]]) << 8;
                     tempRunCount[LANGUAGE[1]] = 0;
                     tempRunCount[LANGUAGE[2]] = 0;
                     tempRunCount[LANGUAGE[3]] = 0;
                     tempRunCount[LANGUAGE[4]] = 0;
+
+                    if (__glibc_unlikely(page_index > acc_base_page + 7)) {
+                        a_accum = _mm256_set1_epi8(0); 
+                        c_accum = _mm256_set1_epi8(0); 
+                        g_accum = _mm256_set1_epi8(0); 
+                        t_accum = _mm256_set1_epi8(0);
+                        acc_base_page = page_index;
+                    }
                     ++page_index;
                     rank_index = 0;
                 }
@@ -375,13 +372,17 @@ void prepare_bwt_decode(BWTDecode *decode_info) {
     u_int32_t g_accum_sum = mm256_hadd_epi8(g_accum);
     u_int32_t t_accum_sum = mm256_hadd_epi8(t_accum);
     decode_info->rankTable[page_index].snapshot.a_entry.val =
-        (decode_info->rankTable[acc_base_page].snapshot.a_entry.val & RUN_COUNT_LOWER_MASK) + a_accum_sum + tempRunCount[LANGUAGE[1]];
+        (decode_info->rankTable[acc_base_page].snapshot.a_entry.val & RUN_COUNT_LOWER_MASK) +
+            a_accum_sum + tempRunCount[LANGUAGE[1]];
     decode_info->rankTable[page_index].snapshot.b_entry.val |=
-        (decode_info->rankTable[acc_base_page].snapshot.b_entry.val & RUN_COUNT_LOWER_MASK) + c_accum_sum + tempRunCount[LANGUAGE[2]];
+        (decode_info->rankTable[acc_base_page].snapshot.b_entry.val & RUN_COUNT_LOWER_MASK) +
+            c_accum_sum + tempRunCount[LANGUAGE[2]];
     decode_info->rankTable[page_index].snapshot.c_entry.val |=
-        (decode_info->rankTable[acc_base_page].snapshot.c_entry.val & RUN_COUNT_LOWER_MASK) + g_accum_sum + tempRunCount[LANGUAGE[3]];
+        (decode_info->rankTable[acc_base_page].snapshot.c_entry.val & RUN_COUNT_LOWER_MASK) +
+            g_accum_sum + tempRunCount[LANGUAGE[3]];
     decode_info->rankTable[page_index].snapshot.d_entry.val |=
-        (((decode_info->rankTable[acc_base_page].snapshot.d_entry.val & RUN_COUNT_UPPER_MASK) >> 8) + t_accum_sum + tempRunCount[LANGUAGE[4]]) << 8;
+        (((decode_info->rankTable[acc_base_page].snapshot.d_entry.val & RUN_COUNT_UPPER_MASK) >> 8) +
+            t_accum_sum + tempRunCount[LANGUAGE[4]]) << 8;
     if (__glibc_unlikely(!end_char_found)) {
         // Find ending char
         for (int backward_iter = i - 1; backward_iter >= 0; --backward_iter) {
@@ -405,8 +406,6 @@ void prepare_bwt_decode(BWTDecode *decode_info) {
         decode_info->CTable[LANGUAGE[2]] + (decode_info->rankTable[page_index].snapshot.b_entry.val & RUN_COUNT_LOWER_MASK);
     decode_info->CTable[LANGUAGE[4]] =
         decode_info->CTable[LANGUAGE[3]] + (decode_info->rankTable[page_index].snapshot.c_entry.val & RUN_COUNT_LOWER_MASK);
-    // decode_info->CTable[LANGUAGE[5]] =
-    //     decode_info->CTable[LANGUAGE[4]] + ((decode_info->rankTable[page_index].snapshot.d_entry.val & RUN_COUNT_UPPER_MASK) >> 8);
 
     decode_info->rankTableSize = curr_index;
 }
@@ -523,11 +522,14 @@ int setup_BWT(BWTDecode *decode_info, char* output_file_path) {
         exit(1);
     }
 
+#ifdef PERF
     clock_t t = clock();
-    // build_tables(decode_info);
+#endif
     prepare_bwt_decode(decode_info);
+#ifdef PERF
     t = clock() - t;
     printf("build_tables() took %f seconds to execute \n", ((double)t)/CLOCKS_PER_SEC);
+#endif
 
     return out_fd;
 }
@@ -649,7 +651,9 @@ int main(int argc, char** argv) {
         printf("Usage: %s <BWT file path> <Reversed file path>\n", argv[0]);
         exit(1);
     }
+#ifdef PERF
     fprintf(stderr, "BWTDecode size %ld RunCountCumEntrySize: %ld\n", sizeof(struct _BWTDecode), RunCountCumEntrySize);
+#endif   
     off_t file_size = open_input_file(&bwtDecode, argv[1]);
 #ifdef DEBUG
     fprintf(stderr, "BWT file file_size: %ld\n", file_size);
