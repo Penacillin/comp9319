@@ -8,7 +8,7 @@ __m128i SHUFFLE_16_DOWN;
 __m256i SHUFFLE_16_DOWN_256;
 __m128i SHUFFLE_2x2x16_4x16;
 
-static inline u_int32_t mm256_hadd_epi8(__m256i x) {
+static inline int32_t mm256_hadd_epi8(__m256i x) {
     const __m256i quad_sum_256i_64 = _mm256_sad_epu8(x, _mm256_setzero_si256()); // 4 * 16 bit ints in lows of 4 64 bit int
     const __m256i quad_sum_256i_64_grouped = _mm256_shuffle_epi8(quad_sum_256i_64, SHUFFLE_16_DOWN_256);
     const __m128i quad_sum_hi = _mm256_extracti128_si256(quad_sum_256i_64_grouped, 1);
@@ -19,7 +19,7 @@ static inline u_int32_t mm256_hadd_epi8(__m256i x) {
     return _mm_extract_epi16(pair_sum, 0) + _mm_extract_epi16(pair_sum, 1); // TODO: use 64 bit int?
 }
 
-static inline u_int32_t mm256_hadd_epi8_2(__m256i x) {
+static inline int32_t mm256_hadd_epi8_2(__m256i x) {
     const __m256i quad_sum_256i_64 = _mm256_sad_epu8(x, _mm256_setzero_si256()); // 4 * 16 bit ints in lows of 4 64 bit int
     const __m128i quad_sum_hi = _mm256_extracti128_si256(quad_sum_256i_64, 1);
     const __m128i quad_sum_lo = _mm256_extracti128_si256(quad_sum_256i_64, 0);

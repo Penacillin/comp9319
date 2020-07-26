@@ -1,5 +1,5 @@
 CXX=gcc
-CFLAGS=-Wextra -Wall -Werror --std=c11 -march=haswell -mvzeroupper
+CFLAGS=-Wextra -Wall -Werror -Wconversion --std=c11 -march=haswell -mvzeroupper
 LDFLAGS=-lrt
 
 default: CFLAGS += -O3
