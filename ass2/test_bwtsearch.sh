@@ -14,6 +14,7 @@ do
     res=$(diff ./outputs/$file_basename.output.ref ./outputs/$file_basename.output)
     if [[ $res != "" ]]; then
         echo "MISMAATCH"
+        exit 1
     fi
     echo ""
 done
@@ -31,4 +32,5 @@ time ./$MY_SOL ./data/dna-100MB.bwt < ./inputs/random.input > ./outputs/random.o
 res=$(diff ./outputs/random.output.ref ./outputs/random.output)
 if [[ $res != "" ]]; then
     echo "MISMAATCH"
+    exit 1
 fi
