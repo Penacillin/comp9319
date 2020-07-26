@@ -485,7 +485,8 @@ static inline char get_char_rank(const unsigned index, BWTDecode *decode_info, u
         const __m64 string_hi = _mm_cvtsi64_m64(
                 _pdep_u64(decode_info->rankTable[page_index].symbol_array.int_val >> 16, CHAR_DEPOSIT2_8_MASK));
         __m128i symbol_string_16 = _mm_setr_epi64(string_lo, string_hi);
-        const char symbol_language_char = _mm_bsrli_si128(symbol_string_16, char_page_index)[0] & 0xFF;
+        const char symbol_language_char = _bextr_u64(
+                decode_info->rankTable[page_index].symbol_array.int_val, char_page_index*2, 2);
         out_char = SYMBOL_ARRAY_LANGUAGE[(unsigned)symbol_language_char];        
 
         __m128i symbol_out_char_masked = _mm_cmpeq_epi8(
